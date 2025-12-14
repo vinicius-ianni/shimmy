@@ -61,7 +61,7 @@ impl AppState {
             observability: observability::ObservabilityManager::new(),
             response_cache: cache::ResponseCache::new(),
             #[cfg(feature = "vision")]
-            vision_license_manager: None,
+            vision_license_manager: Some(crate::vision_license::VisionLicenseManager::new()),
         }
     }
 }

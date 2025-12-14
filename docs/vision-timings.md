@@ -40,6 +40,18 @@
 | assets/vision-samples/scene2-models.png | 44.340 | 44337 | Could not parse structured output |
 | assets/vision-samples/scene4-check-response.png | 60.084 | 60082 | — |
 
+## Run 3: GPU (CUDA) via VS Code task (server already running)
+- Server: started once via VS Code task `serve-vision-gpu` (bind `127.0.0.1:11436`)
+- Requests sent sequentially (one per image)
+- Model: `registry.ollama.ai/library/minicpm-v/latest`
+
+| image | request_seconds | model_duration_ms | parse_warnings |
+| --- | ---: | ---: | --- |
+| assets/vision-samples/extended-02-after-5-messages.png | 12.982 | 12980 | — |
+| assets/vision-samples/final-test.png | 26.854 | 26851 | — |
+| assets/vision-samples/scene2-models.png | 11.077 | 11074 | — |
+| assets/vision-samples/scene4-check-response.png | 8.816 | 8814 | — |
+
 ## Next steps
 - Repeat the same test after rebuilding with GPU features (e.g., `cargo build --features llama,vision,llama-cuda`) and rerun the server, then append results here for comparison.
 - Consider lowering vision `max_tokens` for faster responses if quality remains acceptable.

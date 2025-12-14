@@ -6,11 +6,13 @@
 #[cfg(feature = "vision")]
 use base64::{engine::general_purpose, Engine as _};
 #[cfg(feature = "vision")]
-use image::{codecs::jpeg::JpegEncoder, ColorType};
+use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
 #[cfg(feature = "vision")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "vision")]
 use std::time::Instant;
+#[cfg(feature = "vision")]
+use tracing::info;
 
 /// Vision response schema
 #[cfg(feature = "vision")]
@@ -94,6 +96,7 @@ pub struct DomElement {
     pub text: Option<String>,
     pub position: Rect,
     pub attributes: std::collections::HashMap<String, String>,
+    pub colors: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Rectangle for positioning
@@ -129,6 +132,11 @@ pub struct VisionRequest {
     #[allow(dead_code)]
     pub raw: Option<bool>,
     pub license: Option<String>,
+    /// Capture screenshot of URL before analysis
+    pub screenshot: Option<bool>,
+    /// Viewport dimensions for screenshot
+    pub viewport_width: Option<u32>,
+    pub viewport_height: Option<u32>,
 }
 
 /// Image preprocessing configuration
@@ -136,7 +144,41 @@ pub struct VisionRequest {
 struct PreprocessConfig {
     max_long_edge: u32,
     max_pixels: u64,
-    jpeg_quality: u8,
+}
+
+/// Get preprocessing config, optionally adjusted for web/screenshot mode
+#[cfg(feature = "vision")]
+fn preprocess_config_for_mode(mode: Option<&str>) -> PreprocessConfig {
+    fn env_u32(key: &str) -> Option<u32> {
+        std::env::var(key).ok().and_then(|v| v.parse::<u32>().ok())
+    }
+
+    fn env_u64(key: &str) -> Option<u64> {
+        std::env::var(key).ok().and_then(|v| v.parse::<u64>().ok())
+    }
+
+    // For web/screenshot mode, use smaller defaults to reduce image tiles
+    // and avoid memory slot exhaustion in the vision model.
+    // Web pages often have lots of fine text, so we prioritize fitting
+    // in memory over maximum resolution.
+    let is_web_mode = mode.map(|m| m == "web").unwrap_or(false);
+    
+    let default_long_edge = if is_web_mode { 512 } else { 640 };
+    let default_pixels = if is_web_mode { 400_000 } else { 1_500_000 };
+
+    let mut cfg = PreprocessConfig {
+        max_long_edge: default_long_edge,
+        max_pixels: default_pixels,
+    };
+
+    // Environment overrides take precedence
+    if let Some(v) = env_u32("SHIMMY_VISION_MAX_LONG_EDGE") {
+        cfg.max_long_edge = v;
+    }
+    if let Some(v) = env_u64("SHIMMY_VISION_MAX_PIXELS") {
+        cfg.max_pixels = v;
+    }
+    cfg
 }
 
 /// Preprocessed image payload passed to mtmd/vision backend
@@ -175,6 +217,8 @@ pub async fn process_vision_request(
 ) -> Result<VisionResponse, Box<dyn std::error::Error>> {
     let start_time = Instant::now();
 
+    let trace = std::env::var("SHIMMY_VISION_TRACE").is_ok();
+
     // Check license first (bypass in dev mode)
     if std::env::var("SHIMMY_VISION_DEV_MODE").is_err() {
         license_manager
@@ -188,26 +232,68 @@ pub async fn process_vision_request(
     }
 
     // Load image data
-    let raw_image_data = if let Some(base64) = &req.image_base64 {
+    let (raw_image_data, captured_dom) = if let Some(base64) = &req.image_base64 {
         // Decode base64 image
-        general_purpose::STANDARD
+        let data = general_purpose::STANDARD
             .decode(base64)
-            .map_err(|e| format!("Failed to decode base64 image: {}", e))?
+            .map_err(|e| format!("Failed to decode base64 image: {}", e))?;
+        (data, None)
     } else if let Some(url) = &req.url {
-        // Fetch image from URL
-        fetch_image_from_url(url).await?
+        // Enable screenshot for web mode or when explicitly requested
+        let should_screenshot = req.screenshot.unwrap_or(false) || req.mode == "web";
+        if should_screenshot {
+            // Try to capture screenshot and extract DOM
+            let viewport_width = req.viewport_width.unwrap_or(1280);
+            let viewport_height = req.viewport_height.unwrap_or(720);
+            match capture_screenshot_and_dom(url, viewport_width, viewport_height).await {
+                Ok((screenshot_data, dom_elements)) => (screenshot_data, Some(dom_elements)),
+                Err(e) => {
+                    tracing::warn!("Screenshot capture failed: {}. Falling back to URL fetch.", e);
+                    // Fall back to fetching URL as image
+                    let data = fetch_image_from_url(url).await?;
+                    (data, None)
+                }
+            }
+        } else {
+            // Fetch image from URL
+            let data = fetch_image_from_url(url).await?;
+            (data, None)
+        }
     } else {
         return Err("Either image_base64 or url must be provided".into());
     };
 
+    if trace {
+        info!(
+            target: "vision",
+            stage = "input",
+            bytes = raw_image_data.len(),
+            has_base64 = req.image_base64.is_some(),
+            has_url = req.url.is_some(),
+            mode = %req.mode,
+            "vision input loaded"
+        );
+    }
+
     // Preprocess image to a safe size/format for the vision backend
-    let preprocess_cfg = PreprocessConfig {
-        max_long_edge: 640,
-        max_pixels: 1_500_000,
-        jpeg_quality: 80,
-    };
+    // Web mode uses smaller defaults to reduce tile count for MiniCPM-V
+    let preprocess_cfg = preprocess_config_for_mode(Some(req.mode.as_str()));
+    tracing::debug!("Preprocess config for mode '{}': max_long_edge={}, max_pixels={}", 
+                    req.mode, preprocess_cfg.max_long_edge, preprocess_cfg.max_pixels);
+    tracing::error!("About to preprocess image: {} bytes", raw_image_data.len());
     let preprocessed = preprocess_image(&raw_image_data, &preprocess_cfg)
         .map_err(|e| format!("Failed to preprocess image: {}", e))?;
+
+    if trace {
+        info!(
+            target: "vision",
+            stage = "preprocess",
+            width = preprocessed.width,
+            height = preprocessed.height,
+            encoded_bytes = preprocessed.bytes.len(),
+            "vision image preprocessed"
+        );
+    }
 
     // Determine model to use (use provided model_name, fallback to env var, then default)
     let vision_model = model_name.to_string();
@@ -249,9 +335,16 @@ pub async fn process_vision_request(
         .await
         .map_err(|e| format!("Failed to load vision model: {}", e))?;
 
+    if trace {
+        info!(
+            target: "vision",
+            stage = "model_load",
+            model = %registry_model_name,
+            "vision model loaded"
+        );
+    }
+
     // Prepare vision prompt based on mode
-    // Encode resized image to base64 as JPEG for compression
-    let image_base64 = general_purpose::STANDARD.encode(&preprocessed.bytes);
     let prompt = prepare_vision_prompt(
         &req.mode,
         preprocessed.width,
@@ -259,17 +352,14 @@ pub async fn process_vision_request(
         &vision_model,
     );
 
-    // Debug: print prompt length
-    eprintln!(
-        "DEBUG: Prompt length: {} characters, image base64 length: {} characters (not embedded in prompt)",
-        prompt.len(),
-        image_base64.len()
-    );
-
-    eprintln!(
-        "DEBUG: About to call generate with prompt: {}",
-        &prompt[..200]
-    );
+    if trace {
+        info!(
+            target: "vision",
+            stage = "prompt",
+            chars = prompt.len(),
+            "vision prompt prepared"
+        );
+    }
 
     // Run inference
     let gen_options = crate::engine::GenOptions {
@@ -280,22 +370,39 @@ pub async fn process_vision_request(
         repeat_penalty: 1.0,
         seed: None,
         stream: false,
-        stop_tokens: vec!["</s>".to_string()],
+        stop_tokens: vec!["</s>".to_string(), "<|im_end|>".to_string()],
     };
 
     // Run inference with timeout to avoid hanging
     let generate_future =
         loaded_model.generate_vision(&preprocessed.bytes, &prompt, gen_options, None);
-    let raw_output =
-        match tokio::time::timeout(std::time::Duration::from_secs(10), generate_future).await {
-            Ok(result) => result.map_err(|e| format!("Vision inference failed: {}", e))?,
-            Err(_) => return Err("Vision inference timed out after 10 seconds".into()),
-        };
+    let timeout_ms = req.timeout_ms.unwrap_or(60_000);
+    if trace {
+        info!(
+            target: "vision",
+            stage = "inference",
+            timeout_ms = timeout_ms,
+            "vision inference starting"
+        );
+    }
+    let raw_output = match tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms),
+        generate_future,
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|e| format!("Vision inference failed: {}", e))?,
+        Err(_) => return Err(format!("Vision inference timed out after {} ms", timeout_ms).into()),
+    };
 
-    eprintln!(
-        "DEBUG: Generate completed, raw_output length: {}",
-        raw_output.len()
-    );
+    if trace {
+        info!(
+            target: "vision",
+            stage = "raw_output",
+            chars = raw_output.len(),
+            "vision inference completed"
+        );
+    }
 
     // Parse model output into structured response
     let response = parse_vision_output(
@@ -303,21 +410,208 @@ pub async fn process_vision_request(
         &req,
         model_name,
         start_time.elapsed().as_millis() as u64,
+        captured_dom,
     )?;
+
+    if trace {
+        info!(
+            target: "vision",
+            stage = "parse",
+            duration_ms = response.meta.duration_ms,
+            warnings = response.meta.parse_warnings.as_ref().map(|w| w.len()).unwrap_or(0),
+            "vision output parsed"
+        );
+    }
 
     Ok(response)
 }
 
 /// Fetch image data from URL
 #[cfg(feature = "vision")]
-async fn fetch_image_from_url(url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
-    let response = client.get(url).send().await?;
+async fn fetch_image_from_url(url: &str) -> Result<Vec<u8>, anyhow::Error> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()?;
+
+    let response = client.get(url).send().await?.error_for_status()?;
     let bytes = response.bytes().await?;
     Ok(bytes.to_vec())
 }
 
-/// Decode, downscale, and JPEG-encode an image to a backend-friendly payload.
+/// Capture screenshot and extract DOM from URL
+#[cfg(feature = "vision")]
+async fn capture_screenshot_and_dom(
+    url: &str,
+    viewport_width: u32,
+    viewport_height: u32,
+) -> Result<(Vec<u8>, Vec<DomElement>), anyhow::Error> {
+    use chromiumoxide::browser::{Browser, BrowserConfig};
+    use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
+    use futures_util::StreamExt;
+
+    // Configure browser for headless operation
+    let config = BrowserConfig::builder()
+        .no_sandbox()
+        .disable_default_args()
+        .arg("--headless=new")
+        .arg("--disable-gpu")
+        .arg("--disable-dev-shm-usage")
+        .arg("--disable-software-rasterizer")
+        .arg("--disable-background-timer-throttling")
+        .arg("--disable-renderer-backgrounding")
+        .arg("--disable-features=TranslateUI")
+        .arg("--hide-scrollbars")
+        .arg("--mute-audio")
+        .window_size(viewport_width, viewport_height)
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to build browser config: {}", e))?;
+
+    // Launch browser - this returns a future
+    let (mut browser, mut handler) = Browser::launch(config)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to launch browser: {}", e))?;
+
+    // Spawn handler to process browser events in background
+    let handler_task = tokio::spawn(async move {
+        while (handler.next().await).is_some() {}
+    });
+
+    // Create new page
+    let page = browser
+        .new_page(url)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create page: {}", e))?;
+
+    // Wait for page to load (networkidle is more reliable than DOMContentLoaded)
+    page.wait_for_navigation()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to wait for navigation: {}", e))?;
+
+    // Small async delay for any remaining dynamic content
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Capture screenshot as PNG
+    let screenshot_data = page
+        .screenshot(
+            chromiumoxide::page::ScreenshotParams::builder()
+                .format(CaptureScreenshotFormat::Png)
+                .full_page(true)
+                .build(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to capture screenshot: {}", e))?;
+
+    tracing::info!("Screenshot captured: {} bytes", screenshot_data.len());
+
+    // Extract DOM elements
+    let dom_elements = extract_dom_elements(&page).await?;
+
+    // Clean up
+    drop(page);
+    browser.close().await.ok();
+    handler_task.abort();
+
+    Ok((screenshot_data, dom_elements))
+}
+
+/// Extract interactive DOM elements from the page
+#[cfg(feature = "vision")]
+async fn extract_dom_elements(page: &chromiumoxide::Page) -> Result<Vec<DomElement>, anyhow::Error> {
+    // Get all interactive elements via JavaScript
+    let script = r#"
+        (function getInteractiveElements() {
+            const selectors = [
+                'button', 'input', 'select', 'textarea', 'a[href]',
+                '[role="button"]', '[onclick]', '[role="link"]',
+                '[role="textbox"]', '[role="combobox"]', '[role="listbox"]',
+                'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'div'
+            ];
+
+            const elements = [];
+            selectors.forEach(selector => {
+                document.querySelectorAll(selector).forEach(el => {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {
+                        const computedStyle = window.getComputedStyle(el);
+                        elements.push({
+                            tag: el.tagName.toLowerCase(),
+                            id: el.id || null,
+                            class: el.className || null,
+                            text: el.textContent?.trim().substring(0, 100) || null,
+                            position: {
+                                x: rect.left / window.innerWidth,
+                                y: rect.top / window.innerHeight,
+                                width: rect.width / window.innerWidth,
+                                height: rect.height / window.innerHeight
+                            },
+                            attributes: {
+                                href: el.href || null,
+                                type: el.type || null,
+                                placeholder: el.placeholder || null,
+                                role: el.getAttribute('role') || null
+                            },
+                            colors: {
+                                background_color: computedStyle.backgroundColor,
+                                color: computedStyle.color,
+                                border_color: computedStyle.borderColor,
+                                fill: computedStyle.fill,
+                                stroke: computedStyle.stroke
+                            }
+                        });
+                    }
+                });
+            });
+            return elements;
+        })()
+    "#;
+
+    let result: serde_json::Value = page
+        .evaluate(script)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to evaluate DOM extraction script: {}", e))?
+        .into_value()
+        .map_err(|e| anyhow::anyhow!("Failed to get value from evaluation: {}", e))?;
+
+    let elements: Vec<serde_json::Value> = serde_json::from_value(result)?;
+
+    let dom_elements = elements
+        .into_iter()
+        .filter_map(|el| {
+            Some(DomElement {
+                tag: el.get("tag")?.as_str()?.to_string(),
+                id: el.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                class: el.get("class").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                text: el.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                position: el.get("position").and_then(|p| {
+                    Some(Rect {
+                        x: p.get("x")?.as_f64()? as f32,
+                        y: p.get("y")?.as_f64()? as f32,
+                        width: p.get("width")?.as_f64()? as f32,
+                        height: p.get("height")?.as_f64()? as f32,
+                    })
+                })?,
+                attributes: el
+                    .get("attributes")
+                    .and_then(|a| a.as_object())
+                    .map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                colors: el.get("colors").and_then(|c| c.as_object()).map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                }),
+            })
+        })
+        .collect();
+
+    Ok(dom_elements)
+}
+
+/// Decode, downscale, and lossless-PNG-encode an image to a backend-friendly payload.
 #[cfg(feature = "vision")]
 fn preprocess_image(
     data: &[u8],
@@ -372,8 +666,9 @@ fn preprocess_image(
     }
 
     let mut encoded = Vec::new();
-    let mut encoder = JpegEncoder::new_with_quality(&mut encoded, cfg.jpeg_quality);
-    encoder.encode(resized_rgb.as_raw(), target_w, target_h, ColorType::Rgb8)?;
+    // Lossless encoding improves OCR on low-contrast UI text compared to JPEG artifacts.
+    let encoder = PngEncoder::new(&mut encoded);
+    encoder.write_image(resized_rgb.as_raw(), target_w, target_h, ColorType::Rgb8)?;
 
     Ok(PreprocessedImage {
         bytes: encoded,
@@ -386,27 +681,85 @@ fn preprocess_image(
 #[cfg(feature = "vision")]
 fn prepare_vision_prompt(mode: &str, width: u32, height: u32, model_name: &str) -> String {
     let base_instruction = format!(
-        "You are an AI vision assistant. Analyze the provided image (dimensions: {}x{} pixels) and respond ONLY with a valid JSON object. Do not include any explanatory text before or after the JSON.\n\n",
-        width,
-        height
+        "Analyze the provided image ({}x{} px). Return ONE valid JSON object only (no markdown). Use null for unknowns and [] for empty lists.",
+        width, height
     );
 
+    // Keep this short: long prompts increase token count and can trigger mtmd "memory slot" failures.
+    let schema_hint = "Keys: text_blocks([{text,confidence}]), layout({theme,regions,key_ui_elements}), visual({background,accent_colors,contrast,description}), interaction({description}), dom_map(list or null).";
+
     let analysis_task = match mode {
-        "ocr" => "Extract all visible text from the image. Return JSON: {\"text_blocks\": [{\"text\": \"extracted text here\", \"confidence\": 0.95}]}",
-        "layout" => "Analyze the layout and structure. Return JSON: {\"layout\": {\"regions\": [{\"name\": \"region_name\", \"description\": \"description\"}], \"key_ui_elements\": [{\"name\": \"element_name\", \"element_type\": \"type\"}]}}",
-        "brief" => "Provide a brief visual description. Return JSON: {\"visual\": {\"description\": \"brief description of what you see\"}}",
-        "web" => "Analyze as web page screenshot. Return JSON: {\"dom_map\": [{\"tag\": \"div\", \"text\": \"content\"}], \"interaction\": {\"description\": \"interactive elements\"}}",
-        "full" | _ => "Perform comprehensive analysis. Return JSON with ALL fields: {\"text_blocks\": [...], \"layout\": {\"regions\": [...], \"key_ui_elements\": [...]}, \"visual\": {\"description\": \"...\"}, \"interaction\": {\"description\": \"...\"}}",
+        "ocr" => "OCR: extract all visible on-screen text exactly as written. Do not add labels or prefixes (no 'A:', 'Q:', 'User:', 'Assistant:', bullet markers). Do not paraphrase, summarize, or correct spelling. Preserve punctuation and casing.",
+        "layout" => "Layout: identify major regions and key UI elements.",
+        "brief" => "Brief: concise visual description.",
+        "web" => "Web screenshot: include dom_map with approximate normalized boxes (x,y,width,height in 0..1) and describe interactions.",
+        "full" => "Full: fill text_blocks, layout, visual (accent_colors as #RRGGBB when possible), and interaction.",
+        _ => "Full: fill text_blocks, layout, visual (accent_colors as #RRGGBB when possible), and interaction.",
     };
 
     // Image is provided separately to the backend; keep prompt small to avoid Windows argv limits.
     if model_name.to_lowercase().contains("llava") {
-        format!("<s>[INST] {}{} [/INST]", base_instruction, analysis_task)
+        format!(
+            "<s>[INST] {} {} {} [/INST]",
+            base_instruction, schema_hint, analysis_task
+        )
     } else {
         format!(
-            "<|im_start|>user\n{}{}<|im_end|>\n<|im_start|>assistant\n",
-            base_instruction, analysis_task
+            "<|im_start|>user\n{} {} {}<|im_end|>\n<|im_start|>assistant\n",
+            base_instruction, schema_hint, analysis_task
         )
+    }
+}
+
+#[cfg(all(test, feature = "vision"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preprocess_image_downscales_and_pngs() {
+        // Construct a large synthetic image and encode as PNG (input format doesn't matter).
+        let img = image::RgbImage::from_fn(2000, 1000, |x, y| {
+            let r = (x % 256) as u8;
+            let g = (y % 256) as u8;
+            let b = ((x.wrapping_add(y)) % 256) as u8;
+            image::Rgb([r, g, b])
+        });
+
+        let dyn_img = image::DynamicImage::ImageRgb8(img);
+        let mut png_bytes = Vec::new();
+        dyn_img
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("png encode");
+
+        let cfg = PreprocessConfig {
+            max_long_edge: 640,
+            max_pixels: 1_500_000,
+        };
+
+        let out = preprocess_image(&png_bytes, &cfg).expect("preprocess");
+        assert!(out.width.max(out.height) <= cfg.max_long_edge);
+        assert!((out.width as u64) * (out.height as u64) <= cfg.max_pixels);
+        // PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
+        let sig: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        assert!(out.bytes.len() >= sig.len());
+        assert_eq!(&out.bytes[..sig.len()], &sig);
+    }
+
+    #[test]
+    fn prepare_vision_prompt_is_compact_and_json_only() {
+        let p = prepare_vision_prompt(
+            "full",
+            640,
+            480,
+            "registry.ollama.ai/library/minicpm-v/latest",
+        );
+        assert!(p.contains("valid JSON"));
+        assert!(!p.contains("```"));
+        assert!(p.contains("text_blocks"));
+        assert!(p.contains("dom_map"));
     }
 }
 
@@ -417,19 +770,25 @@ fn parse_vision_output(
     req: &VisionRequest,
     model_name: &str,
     duration_ms: u64,
+    captured_dom: Option<Vec<DomElement>>,
 ) -> Result<VisionResponse, Box<dyn std::error::Error>> {
-    // Try to parse as JSON first
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw_output) {
-        return parse_structured_output(&parsed, req, model_name, duration_ms, raw_output);
-    }
+    let (json_candidate, warnings) = extract_json_candidate(raw_output);
 
-    // Fallback: extract JSON from text response
-    if let Some(json_start) = raw_output.find('{') {
-        if let Some(json_end) = raw_output.rfind('}') {
-            let json_str = &raw_output[json_start..=json_end];
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-                return parse_structured_output(&parsed, req, model_name, duration_ms, raw_output);
-            }
+    if let Some(json_str) = json_candidate {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+            return parse_structured_output(
+                &parsed,
+                req,
+                model_name,
+                duration_ms,
+                raw_output,
+                if warnings.is_empty() {
+                    None
+                } else {
+                    Some(warnings)
+                },
+                captured_dom.clone(),
+            );
         }
     }
 
@@ -454,7 +813,7 @@ fn parse_vision_output(
             description: Some("Analysis completed".to_string()),
         },
         interaction: Interaction { description: None },
-        dom_map: None,
+        dom_map: captured_dom,
         meta: Meta {
             model: model_name.to_string(),
             backend: "llama.cpp".to_string(),
@@ -465,6 +824,81 @@ fn parse_vision_output(
     })
 }
 
+#[cfg(feature = "vision")]
+fn extract_json_candidate(raw_output: &str) -> (Option<String>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut s = raw_output.trim().to_string();
+
+    // Strip common markdown code fences.
+    if s.starts_with("```") {
+        warnings.push("Stripped markdown code fences".to_string());
+        // Drop first fence line
+        if let Some(nl) = s.find('\n') {
+            s = s[nl + 1..].to_string();
+        } else {
+            s.clear();
+        }
+        // Drop trailing fence
+        if let Some(end) = s.rfind("```") {
+            s = s[..end].to_string();
+        }
+        s = s.trim().to_string();
+    }
+
+    // Fast path: whole string is JSON
+    if s.starts_with('{') && s.ends_with('}') {
+        return (Some(s), warnings);
+    }
+
+    // Try to extract a balanced {...} object from within surrounding text.
+    if let Some(extracted) = extract_first_json_object(&s) {
+        warnings.push("Extracted JSON object from surrounding text".to_string());
+        return (Some(extracted), warnings);
+    }
+
+    (None, warnings)
+}
+
+#[cfg(feature = "vision")]
+fn extract_first_json_object(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let mut depth = 0i32;
+            let mut in_string = false;
+            let mut escape = false;
+            let start = i;
+            let mut j = i;
+            while j < bytes.len() {
+                let b = bytes[j];
+                if in_string {
+                    if escape {
+                        escape = false;
+                    } else if b == b'\\' {
+                        escape = true;
+                    } else if b == b'"' {
+                        in_string = false;
+                    }
+                } else if b == b'"' {
+                    in_string = true;
+                } else if b == b'{' {
+                    depth += 1;
+                } else if b == b'}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        let end = j;
+                        return Some(s[start..=end].to_string());
+                    }
+                }
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Parse structured JSON output into VisionResponse
 #[cfg(feature = "vision")]
 fn parse_structured_output(
@@ -473,9 +907,11 @@ fn parse_structured_output(
     model_name: &str,
     duration_ms: u64,
     raw_output: &str,
+    parse_warnings: Option<Vec<String>>,
+    captured_dom: Option<Vec<DomElement>>,
 ) -> Result<VisionResponse, Box<dyn std::error::Error>> {
     // Extract text blocks
-    let text_blocks = parsed
+    let mut text_blocks = parsed
         .get("text_blocks")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -492,6 +928,29 @@ fn parse_structured_output(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+
+    // OCR should be literal text. Some models add conversational labels like "A:".
+    // Strip common prefixes for mode=ocr to keep output clean for OCR quality evaluation.
+    if req.mode == "ocr" {
+        for block in &mut text_blocks {
+            let trimmed = block.text.trim_start();
+            let cleaned = trimmed
+                .strip_prefix("A: ")
+                .or_else(|| trimmed.strip_prefix("A:"))
+                .or_else(|| trimmed.strip_prefix("Q: "))
+                .or_else(|| trimmed.strip_prefix("Q:"))
+                .or_else(|| trimmed.strip_prefix("User: "))
+                .or_else(|| trimmed.strip_prefix("User:"))
+                .or_else(|| trimmed.strip_prefix("Assistant: "))
+                .or_else(|| trimmed.strip_prefix("Assistant:"));
+            if let Some(rest) = cleaned {
+                let rest = rest.trim_start();
+                if !rest.is_empty() {
+                    block.text = rest.to_string();
+                }
+            }
+        }
+    }
 
     // Extract layout information
     let layout = if let Some(layout_obj) = parsed.get("layout") {
@@ -553,20 +1012,18 @@ fn parse_structured_output(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default(),
-            contrast: visual_obj.get("contrast").and_then(|c| {
-                Some(Contrast {
-                    ratio: c.get("ratio").and_then(|r| r.as_f64()).map(|r| r as f32),
-                    compliant: c.get("compliant").and_then(|c| c.as_bool()),
-                    issues: c
-                        .get("issues")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default(),
-                })
+            contrast: visual_obj.get("contrast").map(|c| Contrast {
+                ratio: c.get("ratio").and_then(|r| r.as_f64()).map(|r| r as f32),
+                compliant: c.get("compliant").and_then(|c| c.as_bool()),
+                issues: c
+                    .get("issues")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
             }),
             description: visual_obj
                 .get("description")
@@ -626,6 +1083,14 @@ fn parse_structured_output(
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    colors: item
+                        .get("colors")
+                        .and_then(|c| c.as_object())
+                        .map(|obj| {
+                            obj.iter()
+                                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                                .collect()
+                        }),
                 })
             })
             .collect::<Vec<_>>()
@@ -639,14 +1104,18 @@ fn parse_structured_output(
         layout,
         visual,
         interaction,
-        dom_map,
+        dom_map: captured_dom.or(dom_map),
         meta: Meta {
             model: model_name.to_string(),
             backend: "llama.cpp".to_string(),
             duration_ms,
-            parse_warnings: None,
+            parse_warnings,
         },
-        raw_model_output: Some(raw_output.to_string()),
+        raw_model_output: if req.raw.unwrap_or(false) {
+            Some(raw_output.to_string())
+        } else {
+            None
+        },
     })
 }
 
@@ -663,7 +1132,7 @@ fn check_ollama_model_exists(model_name: &str) -> bool {
 
     // Run ollama list and check if our model is in the output
     match std::process::Command::new("ollama")
-        .args(&["list"])
+        .args(["list"])
         .output()
     {
         Ok(output) if output.status.success() => {

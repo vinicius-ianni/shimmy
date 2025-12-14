@@ -54,6 +54,23 @@ test-screenshots/
 # Local vendor/build dirs (not part of shimmy repo)
 llama-cpp-minicpm/
 target-gpu/
+target-gpu-*/
+
+# Vision development output and testing artifacts
+out/
+assets/vision-samples/preprocessed-*/
+nul
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Development-only binaries (not for distribution)
+src/bin/vision_preprocess_dump.rs
+scripts/vision_samples_run.sh
+
+# Windows/Git artifacts
+%s
 
 # Local logs and scratch files
 output.md

@@ -363,6 +363,16 @@ impl LlamaEngine {
 /// Helper function to find the projector blob for Ollama vision models
 #[cfg(feature = "llama")]
 fn find_ollama_projector_blob(model_name: &str) -> Option<std::path::PathBuf> {
+    fn projector_debug_enabled() -> bool {
+        match std::env::var("SHIMMY_OLLAMA_PROJECTOR_DEBUG") {
+            Ok(v) => {
+                let v = v.trim();
+                !v.is_empty() && v != "0" && v.to_lowercase() != "false"
+            }
+            Err(_) => false,
+        }
+    }
+
     // For Ollama models, we need to find the projector blob
     // This is a bit hacky - we run `ollama show <model> --modelfile` and parse the output
     // to find the second FROM statement which should be the projector
@@ -376,24 +386,33 @@ fn find_ollama_projector_blob(model_name: &str) -> Option<std::path::PathBuf> {
         model_name.to_string()
     };
 
-    eprintln!(
-        "DEBUG: Looking for projector for model: {}",
-        actual_model_name
-    );
+    if projector_debug_enabled() {
+        eprintln!(
+            "DEBUG: Looking for projector for model: {}",
+            actual_model_name
+        );
+    }
 
     // Run ollama show to get the modelfile
     let output = std::process::Command::new("ollama")
-        .args(&["show", &actual_model_name, "--modelfile"])
+        .args(["show", actual_model_name.as_str(), "--modelfile"])
         .output()
         .ok()?;
 
     if !output.status.success() {
-        eprintln!("DEBUG: ollama show failed");
+        if projector_debug_enabled() {
+            eprintln!("DEBUG: ollama show failed");
+        }
         return None;
     }
 
     let modelfile = String::from_utf8_lossy(&output.stdout);
-    eprintln!("DEBUG: Modelfile content:\n{}", modelfile);
+    if projector_debug_enabled() {
+        eprintln!(
+            "DEBUG: Received modelfile output ({} bytes)",
+            modelfile.len()
+        );
+    }
 
     // Parse the FROM statements
     let mut from_lines = modelfile
@@ -405,7 +424,9 @@ fn find_ollama_projector_blob(model_name: &str) -> Option<std::path::PathBuf> {
     let _model_from = from_lines.next()?;
     let projector_from = from_lines.next()?;
 
-    eprintln!("DEBUG: Found projector: {}", projector_from);
+    if projector_debug_enabled() {
+        eprintln!("DEBUG: Found projector: {}", projector_from);
+    }
 
     Some(std::path::PathBuf::from(projector_from))
 }
@@ -704,10 +725,82 @@ impl LoadedModel for LlamaLoaded {
             ));
         }
 
+        fn mtmd_np_from_env() -> u32 {
+            let raw = std::env::var("SHIMMY_VISION_MTMD_NP")
+                .or_else(|_| std::env::var("SHIMMY_MTMD_NP"))
+                .ok();
+            let parsed = raw
+                .as_deref()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(1);
+            parsed.clamp(1, 64)
+        }
+
+        fn mtmd_ctx_from_env() -> u32 {
+            let raw = std::env::var("SHIMMY_VISION_MTMD_CTX")
+                .or_else(|_| std::env::var("SHIMMY_MTMD_CTX"))
+                .ok();
+            let parsed = raw
+                .as_deref()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(4096);
+            parsed.clamp(512, 131072)
+        }
+
+        fn run_mtmd(
+            mtmd_path: &std::path::Path,
+            model_path: &std::path::Path,
+            projector_path: &std::path::Path,
+            image_path: &std::path::Path,
+            prompt: &str,
+            n_parallel: u32,
+            ctx_size: u32,
+        ) -> std::io::Result<std::process::Output> {
+            std::process::Command::new(mtmd_path)
+                // Avoid global LLAMA_ARG_* env vars overriding our explicit CLI flags.
+                // In particular, LLAMA_ARG_N_PARALLEL can force n_seq_max high, shrinking
+                // per-sequence context (n_ctx_seq) and triggering "failed to find a memory slot".
+                .env_remove("LLAMA_ARG_N_PARALLEL")
+                .env_remove("LLAMA_ARG_CTX_SIZE")
+                .env_remove("LLAMA_ARG_BATCH")
+                .env_remove("LLAMA_ARG_UBATCH")
+                .env_remove("LLAMA_ARG_N_PREDICT")
+                .env_remove("LLAMA_ARG_THREADS")
+                .env_remove("LLAMA_ARG_THREADS_BATCH")
+                .arg("-m")
+                .arg(model_path)
+                .arg("--mmproj")
+                .arg(projector_path)
+                .arg("-c")
+                .arg(ctx_size.to_string())
+                // MiniCPM-V often slices images; mtmd needs enough parallel sequence slots.
+                .arg("-np")
+                .arg(n_parallel.to_string())
+                .arg("--image")
+                .arg(image_path)
+                .arg("-p")
+                .arg(prompt)
+                .arg("--temp")
+                .arg("0.1")
+                .output()
+        }
+
         // Save image to temp file
         let temp_dir = std::env::temp_dir();
-        // Preprocessed bytes are JPEG, so write with .jpg to avoid decoder confusion.
-        let image_path = temp_dir.join(format!("shimmy_vision_{}.jpg", std::process::id()));
+        // Preprocessed bytes are PNG, so write with .png to avoid decoder confusion.
+        // Use a unique name per request to avoid collisions under concurrent /api/vision.
+        static IMAGE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let counter = IMAGE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let image_path = temp_dir.join(format!(
+            "shimmy_vision_{}_{}_{}.png",
+            std::process::id(),
+            counter,
+            nanos
+        ));
         std::fs::write(&image_path, image_data)?;
 
         // Call mtmd CLI (consolidated multimodal runner)
@@ -739,23 +832,173 @@ impl LoadedModel for LlamaLoaded {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("llama-mtmd-cli.exe not found; build with cmake --build build --target llama-mtmd-cli"))?;
 
-        let output = std::process::Command::new(&mtmd_path)
-            .arg("-m")
-            .arg(&self.model_path)
-            .arg("--mmproj")
-            .arg(self.projector_path.as_ref().unwrap())
-            .arg("--image")
-            .arg(&image_path)
-            .arg("-p")
-            .arg(prompt)
-            .arg("--temp")
-            .arg("0.1")
-            .output()?;
+        let projector_path = self.projector_path.as_ref().unwrap();
+        let n_parallel = mtmd_np_from_env();
+        let ctx_size = mtmd_ctx_from_env();
+        let mut current_n_parallel = n_parallel;
+        let mut current_ctx_size = ctx_size;
+
+        let trace = std::env::var("SHIMMY_VISION_TRACE").is_ok();
+        if trace {
+            tracing::info!(
+                target: "vision",
+                stage = "mtmd_start",
+                mtmd = %mtmd_path.display(),
+                model = %self.model_path.display(),
+                mmproj = %projector_path.display(),
+                image = %image_path.display(),
+                n_parallel = current_n_parallel,
+                ctx_size = current_ctx_size,
+                prompt_chars = prompt.len(),
+                image_bytes = image_data.len(),
+                "invoking mtmd"
+            );
+        }
+        let mut output = run_mtmd(
+            &mtmd_path,
+            &self.model_path,
+            projector_path,
+            &image_path,
+            prompt,
+            current_n_parallel,
+            current_ctx_size,
+        )?;
+
+        // Retry with more slots if mtmd reports the known MiniCPM "memory slot" failure.
+        // This shows up as HTTP 500 in Shimmy if we don't handle it.
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            if trace {
+                tracing::warn!(
+                    target: "vision",
+                    stage = "mtmd_fail",
+                    status = %output.status,
+                    stderr_chars = stderr.len(),
+                    "mtmd failed"
+                );
+            }
+
+            let is_slot_failure = stderr.contains("failed to find a memory slot")
+                || stderr.contains("failed to decode token")
+                || stderr.contains("failed to decode text")
+                || stderr.contains("failed to decode image");
+
+            // mtmd can fail when the prompt token count exceeds per-sequence context.
+            // Example: "find_slot: n_tokens = 323 > size = 256".
+            let find_slot_re = regex::Regex::new(r"find_slot: n_tokens = (\d+) > size = (\d+)")
+                .expect("valid regex");
+
+            // Attempt 1: prefer minimizing parallelism (maximizes per-seq context) and increasing ctx.
+            if is_slot_failure {
+                let retry_n_parallel = 1;
+                let retry_ctx = current_ctx_size.max(8192);
+                current_n_parallel = retry_n_parallel;
+                current_ctx_size = retry_ctx;
+                if trace {
+                    tracing::info!(
+                        target: "vision",
+                        stage = "mtmd_retry",
+                        attempt = 1,
+                        n_parallel = current_n_parallel,
+                        ctx_size = current_ctx_size,
+                        "retrying mtmd"
+                    );
+                }
+                output = run_mtmd(
+                    &mtmd_path,
+                    &self.model_path,
+                    projector_path,
+                    &image_path,
+                    prompt,
+                    current_n_parallel,
+                    current_ctx_size,
+                )?;
+
+                // If it still fails with the same slot issue, try one more time with more slots.
+                if !output.status.success() {
+                    let stderr_retry = String::from_utf8_lossy(&output.stderr);
+                    let still_slot_failure = stderr_retry.contains("failed to find a memory slot")
+                        || stderr_retry.contains("failed to decode token")
+                        || stderr_retry.contains("failed to decode text")
+                        || stderr_retry.contains("failed to decode image");
+
+                    if still_slot_failure {
+                        let retry2_ctx = current_ctx_size.max(16384);
+                        current_ctx_size = retry2_ctx;
+                        if trace {
+                            tracing::info!(
+                                target: "vision",
+                                stage = "mtmd_retry",
+                                attempt = 2,
+                                n_parallel = current_n_parallel,
+                                ctx_size = current_ctx_size,
+                                "retrying mtmd"
+                            );
+                        }
+                        output = run_mtmd(
+                            &mtmd_path,
+                            &self.model_path,
+                            projector_path,
+                            &image_path,
+                            prompt,
+                            current_n_parallel,
+                            current_ctx_size,
+                        )?;
+                    }
+                }
+            }
+
+            // Attempt 2: if mtmd tells us n_tokens > size, increase -c to satisfy it.
+            if !output.status.success() {
+                let stderr2 = String::from_utf8_lossy(&output.stderr);
+                if let Some(caps) = find_slot_re.captures(&stderr2) {
+                    let n_tokens = caps
+                        .get(1)
+                        .and_then(|m| m.as_str().parse::<u32>().ok())
+                        .unwrap_or(0);
+                    // Want n_ctx_seq >= n_tokens + margin.
+                    let needed_per_seq = (n_tokens + 128).max(512);
+                    let needed_ctx = current_n_parallel
+                        .saturating_mul(needed_per_seq)
+                        .max(current_ctx_size);
+                    let needed_ctx = needed_ctx.clamp(512, 131072);
+                    current_ctx_size = needed_ctx;
+                    if trace {
+                        tracing::info!(
+                            target: "vision",
+                            stage = "mtmd_retry",
+                            attempt = 3,
+                            n_parallel = current_n_parallel,
+                            ctx_size = current_ctx_size,
+                            "retrying mtmd based on find_slot"
+                        );
+                    }
+                    output = run_mtmd(
+                        &mtmd_path,
+                        &self.model_path,
+                        projector_path,
+                        &image_path,
+                        prompt,
+                        current_n_parallel,
+                        current_ctx_size,
+                    )?;
+                }
+            }
+        }
 
         // Clean up temp file
         let _ = std::fs::remove_file(&image_path);
 
         if output.status.success() {
+            if trace {
+                tracing::info!(
+                    target: "vision",
+                    stage = "mtmd_ok",
+                    stdout_chars = output.stdout.len(),
+                    "mtmd succeeded"
+                );
+            }
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
             Err(anyhow::anyhow!(

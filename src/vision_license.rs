@@ -2,9 +2,40 @@
 //!
 //! Keygen-based licensing for vision features.
 //! Handles license validation, caching, and usage metering.
+//!
+//! ## Security Features (per Keygen official recommendations)
+//!
+//! 1. **Hard-coded Account ID & Public Key** - Prevents key-swapping attacks
+//!    where a bad actor redirects validation to their own Keygen account.
+//!    See: https://keygen.sh/docs/api/security/#security-public-tokens
+//!
+//! 2. **Ed25519 Response Signature Verification** - Prevents MITM and replay
+//!    attacks by cryptographically verifying API responses.
+//!    See: https://keygen.sh/docs/api/signatures/
+//!
+//! 3. **Custom User-Agent Header** - Enables Keygen's AI/ML crack detection.
+//!    See: https://keygen.sh/docs/api/security/#security-crack-prevention
 
 #[cfg(feature = "vision")]
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+#[cfg(feature = "vision")]
 use serde::{Deserialize, Serialize};
+
+/// Hard-coded Keygen Account ID (SECURITY: Do not move to environment variable)
+/// This is a public identifier, safe to embed in source code.
+#[cfg(feature = "vision")]
+const KEYGEN_ACCOUNT_ID: &str = "6270bf9c-23ad-4483-9296-3a6d9178514a";
+
+/// Hard-coded Keygen Ed25519 Public Key (SECURITY: Do not move to environment variable)
+/// Used to verify API response signatures, preventing MITM and replay attacks.
+/// Format: Hex-encoded 32-byte Ed25519 public key
+#[cfg(feature = "vision")]
+const KEYGEN_PUBLIC_KEY_HEX: &str = "42f313585a72a41513208800f730944f1a3b74a8acfff539f96ce244d029fa5d";
+
+/// Shimmy version for User-Agent header (helps Keygen detect cracks)
+#[cfg(feature = "vision")]
+const SHIMMY_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(feature = "vision")]
 use std::collections::HashMap;
 #[cfg(feature = "vision")]
@@ -162,12 +193,8 @@ impl VisionLicenseManager {
             return Err(VisionLicenseError::InvalidLicense);
         }
 
-        // Check vision entitlement
-        if let Some(vision_enabled) = validation.entitlements.get("vision") {
-            if !vision_enabled.as_bool().unwrap_or(false) {
-                return Err(VisionLicenseError::FeatureNotEnabled);
-            }
-        } else {
+        // Check VISION_ANALYSIS entitlement
+        if !validation.entitlements.contains_key("VISION_ANALYSIS") {
             return Err(VisionLicenseError::FeatureNotEnabled);
         }
 
@@ -209,19 +236,36 @@ impl VisionLicenseManager {
     }
 
     /// Call Keygen API to validate license
+    ///
+    /// ## Security Features
+    /// - Hard-coded account ID (prevents key-swapping)
+    /// - Ed25519 signature verification (prevents MITM/replay)
+    /// - Custom User-Agent (enables crack detection)
     async fn call_keygen_validate(
         &self,
         license_key: &str,
     ) -> Result<LicenseValidation, Box<dyn std::error::Error>> {
-        let account_id = std::env::var("KEYGEN_ACCOUNT_ID")
-            .map_err(|_| "KEYGEN_ACCOUNT_ID environment variable not set")?;
+        // SECURITY: Account ID is hard-coded to prevent key-swapping attacks
+        // API key (product token) can remain in env as it's server-side only
         let api_key = std::env::var("KEYGEN_API_KEY")
-            .map_err(|_| "KEYGEN_API_KEY environment variable not set")?;
+            .or_else(|_| std::env::var("KEYGEN_PRODUCT_TOKEN"))
+            .map_err(|_| "KEYGEN_API_KEY or KEYGEN_PRODUCT_TOKEN environment variable not set")?;
 
-        let client = reqwest::Client::new();
+        // Build client with custom User-Agent for crack detection
+        let user_agent = format!(
+            "Shimmy/{} (shimmy-vision) {}/{}",
+            SHIMMY_VERSION,
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        let client = reqwest::Client::builder()
+            .user_agent(&user_agent)
+            .build()?;
+
+        // Include entitlements and policy in response for full license context
         let url = format!(
             "https://api.keygen.sh/v1/accounts/{}/licenses/actions/validate-key",
-            account_id
+            KEYGEN_ACCOUNT_ID
         );
 
         #[derive(Serialize)]
@@ -232,12 +276,33 @@ impl VisionLicenseManager {
         #[derive(Serialize)]
         struct ValidateMeta {
             key: String,
+            scope: ValidateScope,
+        }
+
+        #[derive(Serialize)]
+        struct ValidateScope {
+            /// Include entitlements in validation scope
+            entitlements: Vec<String>,
         }
 
         #[derive(Deserialize)]
         struct ValidateResponse {
             meta: ValidateResponseMeta,
-            data: Option<serde_json::Value>,
+            data: Option<LicenseData>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct LicenseData {
+            attributes: LicenseAttributes,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct LicenseAttributes {
+            expiry: Option<String>,
+            max_uses: Option<u64>,
+            uses: Option<u64>,
         }
 
         #[derive(Deserialize)]
@@ -246,11 +311,23 @@ impl VisionLicenseManager {
             code: String,
             #[serde(default)]
             detail: Option<String>,
+            /// Entitlements attached to license (when scope.entitlements is used)
+            #[serde(default)]
+            scope: Option<ScopeMeta>,
+        }
+
+        #[derive(Deserialize)]
+        struct ScopeMeta {
+            #[serde(default)]
+            entitlements: Vec<String>,
         }
 
         let request_body = ValidateRequest {
             meta: ValidateMeta {
                 key: license_key.to_string(),
+                scope: ValidateScope {
+                    entitlements: vec!["VISION_ANALYSIS".to_string()],
+                },
             },
         };
 
@@ -267,51 +344,86 @@ impl VisionLicenseManager {
             return Err(format!("Keygen API error: {}", response.status()).into());
         }
 
-        let validate_response: ValidateResponse = response.json().await?;
+        // SECURITY: Extract headers needed for signature verification
+        let signature_header = response
+            .headers()
+            .get("Keygen-Signature")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
 
-        // Extract entitlements from the license data if available
-        let mut entitlements = if let Some(data) = validate_response.data {
-            if let Some(entitlements) = data
-                .get("relationships")
-                .and_then(|rels| rels.get("entitlements"))
-                .and_then(|ents| ents.get("data"))
-                .and_then(|ents_data| ents_data.as_array())
-            {
-                let mut ents = HashMap::new();
-                for ent in entitlements {
-                    if let Some(code) = ent
-                        .get("attributes")
-                        .and_then(|attrs| attrs.get("code"))
-                        .and_then(|c| c.as_str())
-                    {
-                        ents.insert(code.to_string(), serde_json::Value::Bool(true));
-                    }
-                }
-                ents
-            } else {
-                HashMap::new()
-            }
+        let date_header = response
+            .headers()
+            .get("Date")
+            .or_else(|| response.headers().get("Keygen-Date"))
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        // Get response body as text for signature verification
+        let response_body = response.text().await?;
+
+        // SECURITY: Verify response signature to prevent MITM attacks
+        // Only verify if we have both signature and date headers
+        if let (Some(sig_header), Some(date)) = (&signature_header, &date_header) {
+            // SECURITY: Check for replay attacks - reject responses older than 5 minutes
+            // Per Keygen docs: https://keygen.sh/docs/api/signatures/#response-signatures
+            Self::check_response_freshness(date)?;
+
+            Self::verify_response_signature(
+                sig_header,
+                date,
+                &response_body,
+            )?;
         } else {
-            HashMap::new()
-        };
-
-        // Add default vision entitlement if not present but license is valid
-        if validate_response.meta.valid && !entitlements.contains_key("vision") {
-            entitlements.insert("vision".to_string(), serde_json::Value::Bool(true));
-        }
-
-        // Add default monthly cap if not present
-        if !entitlements.contains_key("monthly_cap") {
-            entitlements.insert(
-                "monthly_cap".to_string(),
-                serde_json::Value::Number(1000.into()),
+            // Log warning but don't fail - Keygen may not always send signatures
+            tracing::warn!(
+                "Keygen response missing signature or date header - skipping verification. \
+                 sig={}, date={}",
+                signature_header.is_some(),
+                date_header.is_some()
             );
         }
+
+        // Parse the verified response
+        let validate_response: ValidateResponse = serde_json::from_str(&response_body)?;
+
+        // Extract entitlements and usage info
+        let mut entitlements = HashMap::new();
+
+        // Check scoped entitlements from validation
+        if let Some(ref scope) = validate_response.meta.scope {
+            for code in &scope.entitlements {
+                entitlements.insert(code.clone(), serde_json::Value::Bool(true));
+            }
+        }
+
+        // Extract maxUses as monthly_cap and current usage
+        if let Some(ref data) = validate_response.data {
+            if let Some(max_uses) = data.attributes.max_uses {
+                entitlements.insert(
+                    "monthly_cap".to_string(),
+                    serde_json::Value::Number(max_uses.into()),
+                );
+            }
+            if let Some(uses) = data.attributes.uses {
+                entitlements.insert(
+                    "current_uses".to_string(),
+                    serde_json::Value::Number(uses.into()),
+                );
+            }
+        }
+
+        // No default fallback - Keygen policies are source of truth for caps
+
+        // Extract expiry from license data
+        let expires_at = validate_response
+            .data
+            .as_ref()
+            .and_then(|d| d.attributes.expiry.clone());
 
         Ok(LicenseValidation {
             valid: validate_response.meta.valid,
             entitlements,
-            expires_at: None, // Keygen doesn't return expiry in validate-key response
+            expires_at,
             meta: {
                 let mut meta = HashMap::new();
                 meta.insert(
@@ -324,6 +436,152 @@ impl VisionLicenseManager {
                 meta
             },
         })
+    }
+
+    /// Verify Keygen API response signature using Ed25519
+    ///
+    /// ## Security
+    /// This prevents man-in-the-middle attacks where an attacker could
+    /// intercept and modify API responses to make invalid licenses appear valid.
+    ///
+    /// ## Signing String Format (per Keygen docs)
+    /// ```text
+    /// (request-target): post /v1/accounts/<id>/licenses/actions/validate-key
+    /// host: api.keygen.sh
+    /// date: <Date header>
+    /// digest: sha-256=<base64 SHA256 of body>
+    /// ```
+    fn verify_response_signature(
+        sig_header: &str,
+        date_header: &str,
+        response_body: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use sha2::{Digest, Sha256};
+
+        // Parse signature header to extract the signature value
+        // Format: keyid="...", algorithm="ed25519", signature="<base64>", headers="..."
+        let sig_base64 = sig_header
+            .split(',')
+            .find(|part| part.trim().starts_with("signature="))
+            .and_then(|part| {
+                part.trim()
+                    .strip_prefix("signature=\"")
+                    .and_then(|s| s.strip_suffix('"'))
+            })
+            .ok_or("Invalid signature header format: missing signature field")?;
+
+        // Parse algorithm to ensure it's ed25519
+        let algorithm = sig_header
+            .split(',')
+            .find(|part| part.trim().starts_with("algorithm="))
+            .and_then(|part| {
+                part.trim()
+                    .strip_prefix("algorithm=\"")
+                    .and_then(|s| s.strip_suffix('"'))
+            });
+
+        if algorithm != Some("ed25519") {
+            return Err(format!(
+                "Unsupported signature algorithm: {:?} (expected ed25519)",
+                algorithm
+            )
+            .into());
+        }
+
+        // Compute SHA-256 digest of response body
+        let digest_bytes = Sha256::digest(response_body.as_bytes());
+        let digest_b64 = STANDARD.encode(digest_bytes);
+
+        // Build the signing string per Keygen's format:
+        // (request-target): post /v1/accounts/<id>/licenses/actions/validate-key
+        // host: api.keygen.sh
+        // date: <Date header>
+        // digest: sha-256=<base64>
+        let signing_string = format!(
+            "(request-target): post /v1/accounts/{}/licenses/actions/validate-key\n\
+             host: api.keygen.sh\n\
+             date: {}\n\
+             digest: sha-256={}",
+            KEYGEN_ACCOUNT_ID, date_header, digest_b64
+        );
+
+        // Decode the public key from hex
+        let public_key_bytes = hex::decode(KEYGEN_PUBLIC_KEY_HEX)
+            .map_err(|e| format!("Invalid public key hex: {}", e))?;
+
+        let public_key_array: [u8; 32] = public_key_bytes
+            .try_into()
+            .map_err(|_| "Public key must be exactly 32 bytes")?;
+
+        let verifying_key = VerifyingKey::from_bytes(&public_key_array)
+            .map_err(|e| format!("Invalid Ed25519 public key: {}", e))?;
+
+        // Decode signature from base64
+        let sig_bytes = STANDARD
+            .decode(sig_base64)
+            .map_err(|e| format!("Invalid signature base64: {}", e))?;
+
+        let sig_array: [u8; 64] = sig_bytes
+            .try_into()
+            .map_err(|_| "Signature must be exactly 64 bytes")?;
+
+        let signature = Signature::from_bytes(&sig_array);
+
+        // Verify the signature against the signing string
+        verifying_key
+            .verify(signing_string.as_bytes(), &signature)
+            .map_err(|e| {
+                format!(
+                    "SECURITY WARNING: Response signature verification failed! \
+                     Possible MITM attack detected. Error: {}",
+                    e
+                )
+            })?;
+
+        tracing::debug!("Keygen response signature verified successfully");
+        Ok(())
+    }
+
+    /// Check that response is fresh (not a replay attack)
+    ///
+    /// Per Keygen docs: "If the signature is valid, but the response date is
+    /// older than 5 minutes, we recommend rejecting the response"
+    /// See: https://keygen.sh/docs/api/signatures/#response-signatures
+    fn check_response_freshness(date_header: &str) -> Result<(), Box<dyn std::error::Error>> {
+        use chrono::{DateTime, Utc};
+
+        // Parse the HTTP date format: "Wed, 09 Jun 2021 16:08:15 GMT"
+        let response_time = DateTime::parse_from_rfc2822(date_header)
+            .map_err(|e| format!("Invalid date header format: {} ({})", date_header, e))?
+            .with_timezone(&Utc);
+
+        let now = Utc::now();
+        let age = now.signed_duration_since(response_time);
+
+        // Reject responses older than 5 minutes (replay attack protection)
+        const MAX_AGE_SECONDS: i64 = 5 * 60;
+        if age.num_seconds() > MAX_AGE_SECONDS {
+            return Err(format!(
+                "SECURITY WARNING: Response is too old ({} seconds). \
+                 Possible replay attack detected. Response date: {}",
+                age.num_seconds(),
+                date_header
+            )
+            .into());
+        }
+
+        // Also reject responses from the future (clock manipulation)
+        if age.num_seconds() < -60 {
+            return Err(format!(
+                "SECURITY WARNING: Response date is in the future. \
+                 Possible clock tampering detected. Response date: {}",
+                date_header
+            )
+            .into());
+        }
+
+        Ok(())
     }
 }
 

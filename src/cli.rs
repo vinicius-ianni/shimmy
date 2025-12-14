@@ -114,6 +114,15 @@ pub enum Command {
         /// Include raw model output on parse failure
         #[arg(long)]
         raw: bool,
+        /// Capture screenshot of URL before analysis
+        #[arg(long)]
+        screenshot: bool,
+        /// Viewport width for screenshot
+        #[arg(long, default_value_t = 1280)]
+        viewport_width: u32,
+        /// Viewport height for screenshot
+        #[arg(long, default_value_t = 720)]
+        viewport_height: u32,
     },
 }
 

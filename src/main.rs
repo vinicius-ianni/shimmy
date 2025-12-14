@@ -654,6 +654,9 @@ async fn main() -> anyhow::Result<()> {
             timeout,
             license,
             raw,
+            screenshot,
+            viewport_width,
+            viewport_height,
         } => {
             // Build vision request
             let request = crate::vision::VisionRequest {
@@ -673,13 +676,16 @@ async fn main() -> anyhow::Result<()> {
                 timeout_ms: Some(timeout),
                 raw: Some(raw),
                 license,
+                screenshot: Some(screenshot),
+                viewport_width: Some(viewport_width),
+                viewport_height: Some(viewport_height),
             };
 
             let env_model = std::env::var("SHIMMY_VISION_MODEL").ok();
             let model_name = request
                 .model
                 .as_deref()
-                .or_else(|| env_model.as_deref())
+                .or(env_model.as_deref())
                 .unwrap_or("registry.ollama.ai/library/minicpm-v/latest")
                 .to_string();
 

@@ -1130,6 +1130,7 @@ mod tests {
 }
 
 #[cfg(feature = "vision")]
+#[axum::debug_handler]
 pub async fn vision(
     State(state): State<Arc<AppState>>,
     Json(mut req): Json<crate::vision::VisionRequest>,
@@ -1144,15 +1145,60 @@ pub async fn vision(
     let model_name = req
         .model
         .as_deref()
-        .or_else(|| env_model.as_deref())
+        .or(env_model.as_deref())
         .unwrap_or("registry.ollama.ai/library/minicpm-v/latest")
         .to_string();
+
+    let Some(license_manager) = state.vision_license_manager.as_ref() else {
+        tracing::error!("Vision license manager not initialized");
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": {
+                    "code": "VISION_LICENSE_MANAGER_MISSING",
+                    "message": "Vision subsystem not initialized",
+                }
+            })),
+        )
+            .into_response();
+    };
+
+    fn map_vision_error_status(message: &str) -> axum::http::StatusCode {
+        if message.contains("Either image_base64 or url must be provided") {
+            return axum::http::StatusCode::BAD_REQUEST;
+        }
+        if message.starts_with("Failed to decode base64 image") {
+            return axum::http::StatusCode::BAD_REQUEST;
+        }
+        if message.starts_with("Failed to preprocess image") {
+            return axum::http::StatusCode::UNPROCESSABLE_ENTITY;
+        }
+        if message.contains("Vision model '") && message.contains("not available in Ollama") {
+            return axum::http::StatusCode::UNPROCESSABLE_ENTITY;
+        }
+        if message.contains("Failed to fetch image from URL") {
+            if message.to_lowercase().contains("timed out") {
+                return axum::http::StatusCode::GATEWAY_TIMEOUT;
+            }
+            return axum::http::StatusCode::BAD_GATEWAY;
+        }
+        if message.contains("Vision inference timed out") {
+            return axum::http::StatusCode::GATEWAY_TIMEOUT;
+        }
+        if message.contains("Failed to load vision model")
+            || message.contains("Vision inference failed")
+        {
+            return axum::http::StatusCode::BAD_GATEWAY;
+        }
+
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    }
 
     match crate::vision::process_vision_request(
         req,
         &model_name,
-        state.vision_license_manager.as_ref().unwrap(),
-        &*state,
+        license_manager,
+        &state,
     )
     .await
     {
@@ -1168,8 +1214,26 @@ pub async fn vision(
                     .into_response();
             }
 
-            tracing::error!("Vision processing error: {}", e);
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            let full_message = e.to_string();
+            let status = map_vision_error_status(&full_message);
+
+            tracing::error!(status = %status, "Vision processing error: {}", full_message);
+            let message = if std::env::var("SHIMMY_VISION_DEV_MODE").is_ok() {
+                full_message
+            } else {
+                "Vision processing error".to_string()
+            };
+
+            (
+                status,
+                Json(serde_json::json!({
+                    "error": {
+                        "code": "VISION_PROCESSING_ERROR",
+                        "message": message,
+                    }
+                })),
+            )
+                .into_response()
         }
     }
 }
