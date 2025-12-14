@@ -1218,7 +1218,10 @@ pub async fn vision(
             let status = map_vision_error_status(&full_message);
 
             tracing::error!(status = %status, "Vision processing error: {}", full_message);
-            let message = if std::env::var("SHIMMY_VISION_DEV_MODE").is_ok() {
+            
+            // Expose client error messages (4xx) to help users fix their requests
+            // Hide server error details (5xx) for security
+            let message = if status.is_client_error() {
                 full_message
             } else {
                 "Vision processing error".to_string()

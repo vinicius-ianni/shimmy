@@ -121,7 +121,7 @@ pub struct Meta {
 
 /// Vision request for HTTP API
 #[cfg(feature = "vision")]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VisionRequest {
     pub image_base64: Option<String>,
     pub url: Option<String>,
@@ -141,14 +141,14 @@ pub struct VisionRequest {
 
 /// Image preprocessing configuration
 #[cfg(feature = "vision")]
-struct PreprocessConfig {
-    max_long_edge: u32,
-    max_pixels: u64,
+pub struct PreprocessConfig {
+    pub max_long_edge: u32,
+    pub max_pixels: u64,
 }
 
 /// Get preprocessing config, optionally adjusted for web/screenshot mode
 #[cfg(feature = "vision")]
-fn preprocess_config_for_mode(mode: Option<&str>) -> PreprocessConfig {
+pub fn preprocess_config_for_mode(mode: Option<&str>) -> PreprocessConfig {
     fn env_u32(key: &str) -> Option<u32> {
         std::env::var(key).ok().and_then(|v| v.parse::<u32>().ok())
     }
@@ -183,10 +183,10 @@ fn preprocess_config_for_mode(mode: Option<&str>) -> PreprocessConfig {
 
 /// Preprocessed image payload passed to mtmd/vision backend
 #[cfg(feature = "vision")]
-struct PreprocessedImage {
-    bytes: Vec<u8>,
-    width: u32,
-    height: u32,
+pub struct PreprocessedImage {
+    pub bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Stub implementation - returns feature disabled error
@@ -219,17 +219,13 @@ pub async fn process_vision_request(
 
     let trace = std::env::var("SHIMMY_VISION_TRACE").is_ok();
 
-    // Check license first (bypass in dev mode)
-    if std::env::var("SHIMMY_VISION_DEV_MODE").is_err() {
-        license_manager
-            .check_vision_access(req.license.as_deref())
-            .await?;
-    }
+    // Check license
+    license_manager
+        .check_vision_access(req.license.as_deref())
+        .await?;
 
-    // Record usage (skip in dev mode)
-    if std::env::var("SHIMMY_VISION_DEV_MODE").is_err() {
-        license_manager.record_usage().await?;
-    }
+    // Record usage
+    license_manager.record_usage().await?;
 
     // Load image data
     let (raw_image_data, captured_dom) = if let Some(base64) = &req.image_base64 {
@@ -613,7 +609,7 @@ async fn extract_dom_elements(page: &chromiumoxide::Page) -> Result<Vec<DomEleme
 
 /// Decode, downscale, and lossless-PNG-encode an image to a backend-friendly payload.
 #[cfg(feature = "vision")]
-fn preprocess_image(
+pub fn preprocess_image(
     data: &[u8],
     cfg: &PreprocessConfig,
 ) -> Result<PreprocessedImage, Box<dyn std::error::Error>> {
@@ -679,7 +675,7 @@ fn preprocess_image(
 
 /// Prepare vision prompt based on analysis mode
 #[cfg(feature = "vision")]
-fn prepare_vision_prompt(mode: &str, width: u32, height: u32, model_name: &str) -> String {
+pub fn prepare_vision_prompt(mode: &str, width: u32, height: u32, model_name: &str) -> String {
     let base_instruction = format!(
         "Analyze the provided image ({}x{} px). Return ONE valid JSON object only (no markdown). Use null for unknowns and [] for empty lists.",
         width, height
@@ -765,7 +761,7 @@ mod tests {
 
 /// Parse model output into structured vision response
 #[cfg(feature = "vision")]
-fn parse_vision_output(
+pub fn parse_vision_output(
     raw_output: &str,
     req: &VisionRequest,
     model_name: &str,
@@ -825,7 +821,7 @@ fn parse_vision_output(
 }
 
 #[cfg(feature = "vision")]
-fn extract_json_candidate(raw_output: &str) -> (Option<String>, Vec<String>) {
+pub fn extract_json_candidate(raw_output: &str) -> (Option<String>, Vec<String>) {
     let mut warnings = Vec::new();
     let mut s = raw_output.trim().to_string();
 
@@ -860,7 +856,7 @@ fn extract_json_candidate(raw_output: &str) -> (Option<String>, Vec<String>) {
 }
 
 #[cfg(feature = "vision")]
-fn extract_first_json_object(s: &str) -> Option<String> {
+pub fn extract_first_json_object(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
@@ -901,7 +897,7 @@ fn extract_first_json_object(s: &str) -> Option<String> {
 
 /// Parse structured JSON output into VisionResponse
 #[cfg(feature = "vision")]
-fn parse_structured_output(
+pub fn parse_structured_output(
     parsed: &serde_json::Value,
     req: &VisionRequest,
     model_name: &str,

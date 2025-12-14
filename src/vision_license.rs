@@ -24,13 +24,13 @@ use serde::{Deserialize, Serialize};
 /// Hard-coded Keygen Account ID (SECURITY: Do not move to environment variable)
 /// This is a public identifier, safe to embed in source code.
 #[cfg(feature = "vision")]
-const KEYGEN_ACCOUNT_ID: &str = "6270bf9c-23ad-4483-9296-3a6d9178514a";
+pub const KEYGEN_ACCOUNT_ID: &str = "6270bf9c-23ad-4483-9296-3a6d9178514a";
 
 /// Hard-coded Keygen Ed25519 Public Key (SECURITY: Do not move to environment variable)
 /// Used to verify API response signatures, preventing MITM and replay attacks.
 /// Format: Hex-encoded 32-byte Ed25519 public key
 #[cfg(feature = "vision")]
-const KEYGEN_PUBLIC_KEY_HEX: &str = "42f313585a72a41513208800f730944f1a3b74a8acfff539f96ce244d029fa5d";
+pub const KEYGEN_PUBLIC_KEY: &str = "42f313585a72a41513208800f730944f1a3b74a8acfff539f96ce244d029fa5d";
 
 /// Shimmy version for User-Agent header (helps Keygen detect cracks)
 #[cfg(feature = "vision")]
@@ -175,11 +175,6 @@ impl VisionLicenseManager {
         &self,
         license_key: Option<&str>,
     ) -> Result<(), VisionLicenseError> {
-        // Allow development mode bypass
-        if std::env::var("SHIMMY_VISION_DEV_MODE").is_ok() {
-            return Ok(());
-        }
-
         let Some(key) = license_key else {
             return Err(VisionLicenseError::MissingLicense);
         };
@@ -451,7 +446,7 @@ impl VisionLicenseManager {
     /// date: <Date header>
     /// digest: sha-256=<base64 SHA256 of body>
     /// ```
-    fn verify_response_signature(
+    pub fn verify_response_signature(
         sig_header: &str,
         date_header: &str,
         response_body: &str,
@@ -507,7 +502,7 @@ impl VisionLicenseManager {
         );
 
         // Decode the public key from hex
-        let public_key_bytes = hex::decode(KEYGEN_PUBLIC_KEY_HEX)
+        let public_key_bytes = hex::decode(KEYGEN_PUBLIC_KEY)
             .map_err(|e| format!("Invalid public key hex: {}", e))?;
 
         let public_key_array: [u8; 32] = public_key_bytes
@@ -548,7 +543,7 @@ impl VisionLicenseManager {
     /// Per Keygen docs: "If the signature is valid, but the response date is
     /// older than 5 minutes, we recommend rejecting the response"
     /// See: https://keygen.sh/docs/api/signatures/#response-signatures
-    fn check_response_freshness(date_header: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn check_response_freshness(date_header: &str) -> Result<(), Box<dyn std::error::Error>> {
         use chrono::{DateTime, Utc};
 
         // Parse the HTTP date format: "Wed, 09 Jun 2021 16:08:15 GMT"
@@ -582,6 +577,34 @@ impl VisionLicenseManager {
         }
 
         Ok(())
+    }
+
+    // ============ Test Helpers ============
+    // These methods are public for integration tests but should only be used in tests.
+    // They provide controlled access to internal state for test setup and verification.
+
+    /// Set cached license (for testing only)
+    #[doc(hidden)]
+    pub async fn set_cached_license(&self, cached: Option<CachedLicense>) {
+        *self.cache.write().await = cached;
+    }
+
+    /// Get cached license (for testing only)
+    #[doc(hidden)]
+    pub async fn get_cached_license(&self) -> Option<CachedLicense> {
+        self.cache.read().await.clone()
+    }
+
+    /// Set usage stats (for testing only)
+    #[doc(hidden)]
+    pub async fn set_usage_stats(&self, stats: UsageStats) {
+        *self.usage.write().await = stats;
+    }
+
+    /// Get usage stats (for testing only)
+    #[doc(hidden)]
+    pub async fn get_usage_stats(&self) -> UsageStats {
+        self.usage.read().await.clone()
     }
 }
 
@@ -630,15 +653,16 @@ impl VisionLicenseError {
     /// Convert to JSON error response
     pub fn to_json_error(&self) -> serde_json::Value {
         serde_json::json!({
-            "error": "License validation failed",
-            "code": match self {
-                VisionLicenseError::MissingLicense => "MISSING_LICENSE",
-                VisionLicenseError::ValidationFailed(_) => "VALIDATION_ERROR",
-                VisionLicenseError::InvalidLicense => "INVALID_LICENSE",
-                VisionLicenseError::FeatureNotEnabled => "FEATURE_DISABLED",
-                VisionLicenseError::UsageLimitExceeded => "USAGE_LIMIT_EXCEEDED",
-            },
-            "message": self.to_string()
+            "error": {
+                "code": match self {
+                    VisionLicenseError::MissingLicense => "MISSING_LICENSE",
+                    VisionLicenseError::ValidationFailed(_) => "VALIDATION_ERROR",
+                    VisionLicenseError::InvalidLicense => "INVALID_LICENSE",
+                    VisionLicenseError::FeatureNotEnabled => "FEATURE_DISABLED",
+                    VisionLicenseError::UsageLimitExceeded => "USAGE_LIMIT_EXCEEDED",
+                },
+                "message": self.to_string()
+            }
         })
     }
 }
