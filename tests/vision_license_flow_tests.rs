@@ -8,8 +8,6 @@
 //! - Error scenarios and edge cases
 //!
 //! TARGET: 90%+ test coverage on license flow integration
-//!
-//! NOTE: For live Keygen API tests, see vision_keygen_live_tests.rs
 
 #[cfg(feature = "vision")]
 mod vision_license_tests {
@@ -44,8 +42,6 @@ mod vision_license_tests {
     #[tokio::test]
     #[serial]
     async fn test_missing_license_key_returns_error() {
-        // Ensure dev mode is off
-
         let (manager, _temp_dir) = create_test_manager().await;
 
         let result = manager.check_vision_access(None).await;

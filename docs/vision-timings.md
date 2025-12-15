@@ -1,7 +1,7 @@
 # Vision Timing Benchmarks
 
 ## Run 1: CPU-only (no GPU offload)
-- Command: `SHIMMY_VISION_DEV_MODE=1 cargo run --features llama,vision --bin shimmy -- serve --bind 127.0.0.1:11435`
+- Command: `cargo run --features llama,vision --bin shimmy -- serve --bind 127.0.0.1:11435`
 - Model: `minicpm-v` (MiniCPM-V via Shimmy cache)
 - Mode: `full`
 - Requests sent to: `http://127.0.0.1:11435/api/vision`
@@ -20,7 +20,7 @@
 
 ## Run 2: GPU (CUDA) build
 - Build: `CARGO_TARGET_DIR=target-gpu cargo build --features llama,vision,llama-cuda`
-- Server: `CARGO_TARGET_DIR=target-gpu SHIMMY_VISION_DEV_MODE=1 cargo run --features llama,vision,llama-cuda --bin shimmy -- serve --bind 127.0.0.1:11436`
+- Server: `CARGO_TARGET_DIR=target-gpu cargo run --features llama,vision,llama-cuda --bin shimmy -- serve --bind 127.0.0.1:11436`
 - Model/mode/endpoints same as CPU run.
 
 | image | request_seconds | model_duration_ms | parse_warnings |

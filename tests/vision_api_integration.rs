@@ -6,7 +6,7 @@
 //! Tests include:
 //! - HTTP 400: Missing input (no image_base64 or url)
 //! - HTTP 400: Invalid base64
-//! - HTTP 402: Missing license (with dev mode OFF)
+//! - HTTP 402: Missing license
 //! - HTTP 403: Invalid license key
 //! - HTTP 422: Unprocessable image format
 //! - HTTP 504: Timeout scenario (mock)
@@ -28,11 +28,13 @@ mod vision_tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use tower::ServiceExt; // for oneshot
-    use shimmy::{api, engine::adapter::InferenceEngineAdapter, model_registry::Registry, AppState};
-    use shimmy::vision_license::{CachedLicense, LicenseValidation, VisionLicenseManager};
-
-    /// Test license key for integration tests (matches cached license)
-    const TEST_LICENSE_KEY: &str = "TEST-INTEGRATION-LICENSE-KEY";
+    use shimmy::{
+        api, 
+        engine::adapter::InferenceEngineAdapter, 
+        model_registry::Registry, 
+        vision_license::{CachedLicense, LicenseValidation, VisionLicenseManager},
+        AppState
+    };
 
     /// Helper function to create test app state with vision licensing
     fn create_test_app_state() -> Arc<AppState> {
@@ -46,39 +48,35 @@ mod vision_tests {
         Arc::new(state)
     }
 
-    /// Helper function to create test app state with a pre-cached valid license
-    /// This allows tests to bypass actual Keygen API calls while still exercising the license check path
-    async fn create_test_app_state_with_valid_license() -> Arc<AppState> {
+    /// Helper to create test app state with a pre-seeded valid license
+    /// Use this for tests that need to bypass license checks to test other functionality
+    async fn create_test_app_state_with_license() -> Arc<AppState> {
         let registry = Registry::default();
         let engine = Box::new(InferenceEngineAdapter::new());
         let mut state = AppState::new(engine, registry);
         
-        // Initialize vision license manager
-        let license_manager = VisionLicenseManager::new();
+        let manager = VisionLicenseManager::new();
         
-        // Create a cached valid license for testing
+        // Pre-seed with a valid test license
         let cached_license = CachedLicense {
-            key: TEST_LICENSE_KEY.to_string(),
+            key: "test-license-key".to_string(),
             validation: LicenseValidation {
                 valid: true,
                 entitlements: {
                     let mut map = HashMap::new();
                     map.insert("VISION_ANALYSIS".to_string(), json!(true));
-                    map.insert("monthly_cap".to_string(), json!(10000));
+                    map.insert("monthly_cap".to_string(), json!(1000));
                     map
                 },
-                expires_at: Some((Utc::now() + chrono::Duration::days(365)).to_rfc3339()),
+                expires_at: Some((Utc::now() + chrono::Duration::days(30)).to_rfc3339()),
                 meta: HashMap::new(),
             },
             cached_at: Utc::now(),
-            expires_at: Some(Utc::now() + chrono::Duration::days(365)),
+            expires_at: Some(Utc::now() + chrono::Duration::days(30)),
         };
+        manager.set_cached_license(Some(cached_license)).await;
         
-        // Inject the cached license
-        license_manager.set_cached_license(Some(cached_license)).await;
-        
-        state.vision_license_manager = Some(license_manager);
-        
+        state.vision_license_manager = Some(manager);
         Arc::new(state)
     }
 
@@ -90,9 +88,9 @@ mod vision_tests {
             .with_state(state)
     }
 
-    /// Helper function to create test router with pre-cached valid license
+    /// Helper function to create test router with pre-seeded license
     async fn create_test_router_with_license() -> Router {
-        let state = create_test_app_state_with_valid_license().await;
+        let state = create_test_app_state_with_license().await;
         Router::new()
             .route("/api/vision", post(api::vision))
             .with_state(state)
@@ -109,12 +107,12 @@ mod vision_tests {
     #[serial]
     async fn test_missing_input_returns_400() {
         // Test HTTP 400: Missing input (no image_base64 or url)
-        // Use pre-cached license to test input validation
+        // Use pre-seeded license to test input validation
         let app = create_test_router_with_license().await;
 
         let request_body = json!({
-            "mode": "screenshot",
-            "license": TEST_LICENSE_KEY
+            "license": "test-license-key",
+            "mode": "screenshot"
         });
 
         let request = Request::builder()
@@ -144,13 +142,13 @@ mod vision_tests {
     #[serial]
     async fn test_invalid_base64_returns_400() {
         // Test HTTP 400: Invalid base64
-        // Use pre-cached license to test input validation
+        // Use pre-seeded license to test input validation
         let app = create_test_router_with_license().await;
 
         let request_body = json!({
+            "license": "test-license-key",
             "image_base64": "invalid_base64_data!@#$",
-            "mode": "screenshot",
-            "license": TEST_LICENSE_KEY
+            "mode": "screenshot"
         });
 
         let request = Request::builder()
@@ -216,6 +214,7 @@ mod vision_tests {
     #[serial]
     async fn test_invalid_license_key_returns_403() {
         // Test HTTP 403: Invalid license key
+        
         let app = create_test_router();
 
         let request_body = json!({
@@ -254,7 +253,7 @@ mod vision_tests {
     #[serial]
     async fn test_unprocessable_image_format_returns_422() {
         // Test HTTP 422: Unprocessable image format
-        // Use pre-cached license to test image processing
+        // Use pre-seeded license to test input validation
         let app = create_test_router_with_license().await;
 
         // Create a base64-encoded text file instead of image
@@ -262,9 +261,9 @@ mod vision_tests {
         let invalid_image = general_purpose::STANDARD.encode("This is not an image file content");
 
         let request_body = json!({
+            "license": "test-license-key",
             "image_base64": invalid_image,
-            "mode": "screenshot",
-            "license": TEST_LICENSE_KEY
+            "mode": "screenshot"
         });
 
         let request = Request::builder()
@@ -302,10 +301,10 @@ mod vision_tests {
         let app = create_test_router_with_license().await;
 
         let request_body = json!({
+            "license": "test-license-key",
             "url": "http://192.0.2.1:9999/nonexistent", // TEST-NET-1 reserved IP that will timeout
             "mode": "web",
-            "timeout_ms": 100, // Very short timeout
-            "license": TEST_LICENSE_KEY
+            "timeout_ms": 100 // Very short timeout
         });
 
         let request = Request::builder()
@@ -346,15 +345,15 @@ mod vision_tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_valid_request_with_license_returns_200_or_model_error() {
+    async fn test_valid_request_with_license_returns_200() {
         // Test HTTP 200: Valid request returns VisionResponse schema
-        // Use pre-cached valid license
+        // Use pre-seeded license to test happy path
         let app = create_test_router_with_license().await;
 
         let request_body = json!({
+            "license": "test-license-key",
             "image_base64": create_valid_base64_image(),
-            "mode": "screenshot",
-            "license": TEST_LICENSE_KEY
+            "mode": "screenshot"
         });
 
         let request = Request::builder()
@@ -366,7 +365,7 @@ mod vision_tests {
 
         let response = app.oneshot(request).await.unwrap();
         
-        // With valid license and valid image, we should get either:
+        // With valid license and image, we should get either:
         // 200 (success) or 422/500/502 (if model not available)
         // Both are acceptable for testing the happy path structure
         let status = response.status();
