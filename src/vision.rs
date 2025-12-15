@@ -221,17 +221,13 @@ pub async fn process_vision_request(
 
     let trace = std::env::var("SHIMMY_VISION_TRACE").is_ok();
 
-    // Check license first (bypass in dev mode)
-    if std::env::var("SHIMMY_VISION_DEV_MODE").is_err() {
-        license_manager
-            .check_vision_access(req.license.as_deref())
-            .await?;
-    }
+    // Check license first
+    license_manager
+        .check_vision_access(req.license.as_deref())
+        .await?;
 
-    // Record usage (skip in dev mode)
-    if std::env::var("SHIMMY_VISION_DEV_MODE").is_err() {
-        license_manager.record_usage().await?;
-    }
+    // Record usage
+    license_manager.record_usage().await?;
 
     // Load image data
     let (raw_image_data, captured_dom) = if let Some(base64) = &req.image_base64 {
@@ -434,13 +430,41 @@ pub async fn process_vision_request(
 /// Fetch image data from URL
 #[cfg(feature = "vision")]
 async fn fetch_image_from_url(url: &str) -> Result<Vec<u8>, anyhow::Error> {
+    let parsed = validate_remote_url(url).await?;
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()?;
 
-    let response = client.get(url).send().await?.error_for_status()?;
-    let bytes = response.bytes().await?;
-    Ok(bytes.to_vec())
+    let mut response = client.get(parsed).send().await?.error_for_status()?;
+
+    let max_bytes = std::env::var("SHIMMY_VISION_MAX_FETCH_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(25 * 1024 * 1024);
+
+    if let Some(len) = response.content_length() {
+        if len > max_bytes {
+            return Err(anyhow::anyhow!(
+                "URL image is too large ({} bytes; max {} bytes)",
+                len,
+                max_bytes
+            ));
+        }
+    }
+
+    let mut out = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if (out.len() as u64) + (chunk.len() as u64) > max_bytes {
+            return Err(anyhow::anyhow!(
+                "URL image is too large (exceeded {} bytes)",
+                max_bytes
+            ));
+        }
+        out.extend_from_slice(&chunk);
+    }
+
+    Ok(out)
 }
 
 /// Capture screenshot and extract DOM from URL
@@ -453,6 +477,8 @@ async fn capture_screenshot_and_dom(
     use chromiumoxide::browser::{Browser, BrowserConfig};
     use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
     use futures_util::StreamExt;
+
+    let parsed = validate_remote_url(url).await?;
 
     // Configure browser for headless operation
     let config = BrowserConfig::builder()
@@ -483,14 +509,18 @@ async fn capture_screenshot_and_dom(
 
     // Create new page
     let page = browser
-        .new_page(url)
+        .new_page(parsed.as_str())
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create page: {}", e))?;
 
     // Wait for page to load (networkidle is more reliable than DOMContentLoaded)
-    page.wait_for_navigation()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to wait for navigation: {}", e))?;
+    tokio::time::timeout(
+        tokio::time::Duration::from_secs(30),
+        page.wait_for_navigation(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Timed out waiting for page navigation"))?
+    .map_err(|e| anyhow::anyhow!("Failed to wait for navigation: {}", e))?;
 
     // Small async delay for any remaining dynamic content
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -517,6 +547,78 @@ async fn capture_screenshot_and_dom(
     handler_task.abort();
 
     Ok((screenshot_data, dom_elements))
+}
+
+#[cfg(feature = "vision")]
+async fn validate_remote_url(input: &str) -> Result<reqwest::Url, anyhow::Error> {
+    let url = reqwest::Url::parse(input)
+        .map_err(|e| anyhow::anyhow!("Invalid URL '{}': {}", input, e))?;
+
+    match url.scheme() {
+        "http" | "https" => {}
+        other => return Err(anyhow::anyhow!("Unsupported URL scheme: {}", other)),
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("URL is missing a host"))?;
+
+    if host.eq_ignore_ascii_case("localhost") {
+        return Err(anyhow::anyhow!("Refusing to fetch localhost URL"));
+    }
+
+    // If the host is an IP literal, validate it directly.
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if is_private_or_local_ip(ip) {
+            return Err(anyhow::anyhow!("Refusing to fetch private/local IP URL"));
+        }
+        return Ok(url);
+    }
+
+    let port = url.port_or_known_default().unwrap_or(80);
+    let addrs = tokio::net::lookup_host((host, port)).await?;
+    for addr in addrs {
+        if is_private_or_local_ip(addr.ip()) {
+            return Err(anyhow::anyhow!(
+                "Refusing to fetch URL that resolves to private/local IP"
+            ));
+        }
+    }
+
+    Ok(url)
+}
+
+#[cfg(feature = "vision")]
+fn is_private_or_local_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+        }
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
+                return true;
+            }
+
+            // Unique local addresses: fc00::/7
+            let seg0 = v6.segments()[0];
+            if (seg0 & 0xfe00) == 0xfc00 {
+                return true;
+            }
+
+            // Link-local unicast: fe80::/10
+            if (seg0 & 0xffc0) == 0xfe80 {
+                return true;
+            }
+
+            false
+        }
+    }
 }
 
 /// Extract interactive DOM elements from the page
@@ -1163,6 +1265,12 @@ fn vision_model_dir() -> std::path::PathBuf {
 }
 
 #[cfg(feature = "vision")]
+fn minicpm_bootstrap_mutex() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+#[cfg(feature = "vision")]
 async fn ensure_minicpm_v_files(
     auto_download: bool,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), Box<dyn std::error::Error>> {
@@ -1187,6 +1295,9 @@ async fn ensure_minicpm_v_files(
         )
         .into());
     }
+
+    // Prevent duplicate concurrent downloads within the same process.
+    let _guard = minicpm_bootstrap_mutex().lock().await;
 
     ensure_download_and_verify(&model_path, MODEL_URL, MODEL_SHA256_HEX).await?;
     ensure_download_and_verify(&proj_path, PROJ_URL, PROJ_SHA256_HEX).await?;
@@ -1214,7 +1325,14 @@ async fn ensure_download_and_verify(
         let _ = tokio::fs::remove_file(&tmp).await;
     }
 
-    let client = reqwest::Client::new();
+    let timeout_secs = std::env::var("SHIMMY_VISION_DOWNLOAD_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60 * 60);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()?;
     let mut resp = client.get(url).send().await?;
     if !resp.status().is_success() {
         return Err(format!("Failed to download {} (HTTP {})", url, resp.status()).into());
