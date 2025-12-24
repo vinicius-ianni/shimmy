@@ -392,9 +392,24 @@ See our [testing approach](docs/ppt-invariant-testing.md) for technical details.
 
 ---
 
+## Licensing and Project Direction
+
+Shimmy Core is, and will remain, free and open-source software.
+
+The project is licensed under the Apache License 2.0 to provide:
+- explicit patent protection for users and contributors
+- long-term legal stability for the core engine
+- confidence for companies embedding Shimmy in production systems
+
+This license change does **not** restrict usage, commercialization, or self-hosting.
+Shimmy Core is not moving behind a paywall.
+
+Optional, paid tools (such as UI consoles or vision-related add-ons) may exist as
+separate components, but the core engine remains fully open.
+
 ## License & Philosophy
 
-Apache License, Version 2.0 - forever and always.
+Shimmy Core is free and open-source software, licensed under Apache 2.0.
 
 This license includes an explicit patent grant and patent retaliation clause.
 
