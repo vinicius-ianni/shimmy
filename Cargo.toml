@@ -2,7 +2,7 @@
 name = "shimmy"
 version = "1.8.1"
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 description = "Lightweight sub-5MB Ollama alternative with native SafeTensors support. No Python dependencies, 2x faster loading. Now with GitHub Spec-Kit integration for systematic development."
 homepage = "https://github.com/Michael-A-Kuykendall/shimmy"
 repository = "https://github.com/Michael-A-Kuykendall/shimmy"

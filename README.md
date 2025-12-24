@@ -5,7 +5,7 @@
 
   ### 🔒 Local Inference Without Dependencies 🚀
 
-  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+  [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
   [![Security](https://img.shields.io/badge/Security-Audited-green)](https://github.com/Michael-A-Kuykendall/shimmy/security)
   [![Crates.io](https://img.shields.io/crates/v/shimmy.svg)](https://crates.io/crates/shimmy)
   [![Downloads](https://img.shields.io/crates/d/shimmy.svg)](https://crates.io/crates/shimmy)
@@ -394,7 +394,9 @@ See our [testing approach](docs/ppt-invariant-testing.md) for technical details.
 
 ## License & Philosophy
 
-MIT License - forever and always.
+Apache License, Version 2.0 - forever and always.
+
+This license includes an explicit patent grant and patent retaliation clause.
 
 **Philosophy**: Infrastructure should be invisible. Shimmy is infrastructure.
 
