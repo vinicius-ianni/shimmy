@@ -82,6 +82,10 @@ llama-cpp-minicpm/
 __pycache__/
 *.pyc
 
+# Chat logs and session recovery
+scripts/chat.md
+scripts/chat2.md
+
 # Internal docs
 docs/GATEWARDEN_ARCHITECTURE_PROMPT.md
 
