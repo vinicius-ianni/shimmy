@@ -37,6 +37,7 @@ Thumbs.db
 
 # Internal development documents (NEVER commit)
 docs-internal/
+.internal/
 
 # Copilot instructions (internal only)
 .github/copilot-instructions.md
