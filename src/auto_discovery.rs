@@ -678,12 +678,15 @@ impl ModelAutoDiscovery {
                                         };
 
                                         // PPT Invariant: GGUF files must use Llama backend
-                                        let model_type = if blob_path.extension().and_then(|s| s.to_str()) == Some("gguf") {
-                                            "Llama".to_string()
-                                        } else {
-                                            "Ollama".to_string()
-                                        };
-                                        
+                                        let model_type =
+                                            if blob_path.extension().and_then(|s| s.to_str())
+                                                == Some("gguf")
+                                            {
+                                                "Llama".to_string()
+                                            } else {
+                                                "Ollama".to_string()
+                                            };
+
                                         let discovered = DiscoveredModel {
                                             name: display_name,
                                             path: blob_path,
@@ -731,7 +734,10 @@ impl ModelAutoDiscovery {
                         // Prefix with ollama: to distinguish from other sources
                         model.name = format!("ollama:{}", model.name);
                         // PPT Invariant: GGUF files must use Llama backend, preserve existing type
-                        if path.extension().is_none_or(|ext| ext.to_string_lossy().to_lowercase() != "gguf") {
+                        if path
+                            .extension()
+                            .is_none_or(|ext| ext.to_string_lossy().to_lowercase() != "gguf")
+                        {
                             model.model_type = "Ollama".to_string();
                         }
                         models.push(model);
@@ -781,7 +787,10 @@ impl ModelAutoDiscovery {
 
                         model.name = format!("ollama:{}", parent_name);
                         // PPT Invariant: GGUF files must use Llama backend, preserve existing type
-                        if path.extension().is_none_or(|ext| ext.to_string_lossy().to_lowercase() != "gguf") {
+                        if path
+                            .extension()
+                            .is_none_or(|ext| ext.to_string_lossy().to_lowercase() != "gguf")
+                        {
                             model.model_type = "Ollama".to_string();
                         }
                         models.push(model);

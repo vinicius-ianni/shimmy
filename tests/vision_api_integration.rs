@@ -23,28 +23,28 @@ mod vision_tests {
         Router,
     };
     use chrono::Utc;
-    use serial_test::serial;
     use serde_json::json;
+    use serial_test::serial;
+    use shimmy::{
+        api,
+        engine::adapter::InferenceEngineAdapter,
+        model_registry::Registry,
+        vision_license::{CachedLicense, LicenseValidation, VisionLicenseManager},
+        AppState,
+    };
     use std::collections::HashMap;
     use std::sync::Arc;
     use tower::ServiceExt; // for oneshot
-    use shimmy::{
-        api, 
-        engine::adapter::InferenceEngineAdapter, 
-        model_registry::Registry, 
-        vision_license::{CachedLicense, LicenseValidation, VisionLicenseManager},
-        AppState
-    };
 
     /// Helper function to create test app state with vision licensing
     fn create_test_app_state() -> Arc<AppState> {
         let registry = Registry::default();
         let engine = Box::new(InferenceEngineAdapter::new());
         let mut state = AppState::new(engine, registry);
-        
+
         // Initialize vision license manager for testing
         state.vision_license_manager = Some(VisionLicenseManager::new());
-        
+
         Arc::new(state)
     }
 
@@ -54,9 +54,9 @@ mod vision_tests {
         let registry = Registry::default();
         let engine = Box::new(InferenceEngineAdapter::new());
         let mut state = AppState::new(engine, registry);
-        
+
         let manager = VisionLicenseManager::new();
-        
+
         // Pre-seed with a valid test license
         let cached_license = CachedLicense {
             key: "test-license-key".to_string(),
@@ -75,7 +75,7 @@ mod vision_tests {
             expires_at: Some(Utc::now() + chrono::Duration::days(30)),
         };
         manager.set_cached_license(Some(cached_license)).await;
-        
+
         state.vision_license_manager = Some(manager);
         Arc::new(state)
     }
@@ -214,7 +214,7 @@ mod vision_tests {
     #[serial]
     async fn test_invalid_license_key_returns_403() {
         // Test HTTP 403: Invalid license key
-        
+
         let app = create_test_router();
 
         let request_body = json!({
@@ -231,11 +231,13 @@ mod vision_tests {
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        
+
         // Should be 403 for invalid license or 500 for validation failure
         // Both are acceptable based on the implementation
-        assert!(response.status() == StatusCode::FORBIDDEN || 
-                response.status() == StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            response.status() == StatusCode::FORBIDDEN
+                || response.status() == StatusCode::INTERNAL_SERVER_ERROR
+        );
 
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -245,8 +247,10 @@ mod vision_tests {
 
         assert!(body_json["error"].is_object());
         // Could be INVALID_LICENSE or VALIDATION_ERROR depending on validation stage
-        assert!(body_json["error"]["code"].as_str().unwrap() == "INVALID_LICENSE" ||
-                body_json["error"]["code"].as_str().unwrap() == "VALIDATION_ERROR");
+        assert!(
+            body_json["error"]["code"].as_str().unwrap() == "INVALID_LICENSE"
+                || body_json["error"]["code"].as_str().unwrap() == "VALIDATION_ERROR"
+        );
     }
 
     #[tokio::test]
@@ -283,14 +287,16 @@ mod vision_tests {
         let body_json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
 
         assert!(body_json["error"].is_object());
-        assert!(body_json["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("Failed to preprocess image") ||
+        assert!(
             body_json["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("VISION_PROCESSING_ERROR"));
+                .as_str()
+                .unwrap()
+                .contains("Failed to preprocess image")
+                || body_json["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("VISION_PROCESSING_ERROR")
+        );
     }
 
     #[tokio::test]
@@ -320,27 +326,38 @@ mod vision_tests {
             .await
             .unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
-        
+
         // Should return 504 for timeout or 502 for connection failure
         // Also accept 422 for image processing failures and 500 for unhandled errors
-        assert!(status == StatusCode::GATEWAY_TIMEOUT || 
-                status == StatusCode::BAD_GATEWAY ||
-                status == StatusCode::UNPROCESSABLE_ENTITY ||
-                status == StatusCode::INTERNAL_SERVER_ERROR,
-                "Unexpected status: {} body: {}", status, body_str);
+        assert!(
+            status == StatusCode::GATEWAY_TIMEOUT
+                || status == StatusCode::BAD_GATEWAY
+                || status == StatusCode::UNPROCESSABLE_ENTITY
+                || status == StatusCode::INTERNAL_SERVER_ERROR,
+            "Unexpected status: {} body: {}",
+            status,
+            body_str
+        );
 
         let body_json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
 
-        assert!(body_json["error"].is_object(), "error not object: {}", body_str);
+        assert!(
+            body_json["error"].is_object(),
+            "error not object: {}",
+            body_str
+        );
         let msg = body_json["error"]["message"].as_str().unwrap_or("none");
         // Accept various error messages since without a running Ollama server we may get
         // model not found errors before the actual timeout test scenario is reached
-        assert!(msg.contains("timed out") ||
-                msg.contains("Failed to fetch") ||
-                msg.contains("VISION_PROCESSING_ERROR") ||
-                msg.contains("not found") ||
-                msg.contains("Vision processing error"),
-                "Unexpected message: {}", msg);
+        assert!(
+            msg.contains("timed out")
+                || msg.contains("Failed to fetch")
+                || msg.contains("VISION_PROCESSING_ERROR")
+                || msg.contains("not found")
+                || msg.contains("Vision processing error"),
+            "Unexpected message: {}",
+            msg
+        );
     }
 
     #[tokio::test]
@@ -364,16 +381,19 @@ mod vision_tests {
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        
+
         // With valid license and image, we should get either:
         // 200 (success) or 422/500/502 (if model not available)
         // Both are acceptable for testing the happy path structure
         let status = response.status();
-        assert!(status == StatusCode::OK || 
-                status == StatusCode::UNPROCESSABLE_ENTITY ||
-                status == StatusCode::INTERNAL_SERVER_ERROR ||
-                status == StatusCode::BAD_GATEWAY,
-                "Unexpected status: {}", status);
+        assert!(
+            status == StatusCode::OK
+                || status == StatusCode::UNPROCESSABLE_ENTITY
+                || status == StatusCode::INTERNAL_SERVER_ERROR
+                || status == StatusCode::BAD_GATEWAY,
+            "Unexpected status: {}",
+            status
+        );
 
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -389,16 +409,21 @@ mod vision_tests {
             assert!(body_json["visual"].is_object());
             assert!(body_json["interaction"].is_object());
             assert!(body_json["meta"].is_object());
-            
+
             // Verify layout structure
-            assert!(body_json["layout"]["theme"].is_string() || body_json["layout"]["theme"].is_null());
+            assert!(
+                body_json["layout"]["theme"].is_string() || body_json["layout"]["theme"].is_null()
+            );
             assert!(body_json["layout"]["regions"].is_array());
             assert!(body_json["layout"]["key_ui_elements"].is_array());
-            
+
             // Verify visual structure
-            assert!(body_json["visual"]["background"].is_string() || body_json["visual"]["background"].is_null());
+            assert!(
+                body_json["visual"]["background"].is_string()
+                    || body_json["visual"]["background"].is_null()
+            );
             assert!(body_json["visual"]["accent_colors"].is_array());
-            
+
             // Verify meta structure
             assert!(body_json["meta"]["timestamp"].is_string());
             assert!(body_json["meta"]["processing_time_ms"].is_number());
@@ -419,9 +444,9 @@ mod vision_tests {
             "license": "test-license-key"
         });
 
-        let vision_request: shimmy::vision::VisionRequest = 
+        let vision_request: shimmy::vision::VisionRequest =
             serde_json::from_value(request_data.clone()).unwrap();
-        
+
         assert_eq!(vision_request.mode, "screenshot");
         assert!(vision_request.image_base64.is_some());
         assert_eq!(vision_request.model, Some("test-model".to_string()));
@@ -437,7 +462,7 @@ mod vision_tests {
     #[tokio::test]
     async fn test_vision_response_schema_validation() {
         // Test VisionResponse structure can be created and serialized
-        use shimmy::vision::{Interaction, Layout, Meta, TextBlock, Visual, VisionResponse};
+        use shimmy::vision::{Interaction, Layout, Meta, TextBlock, VisionResponse, Visual};
 
         let response = VisionResponse {
             image_path: Some("test.png".to_string()),
@@ -506,13 +531,13 @@ mod vision_tests {
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        
+
         // Response should have CORS headers (these are added by middleware)
         // For this test, we just verify the endpoint responds properly
         assert!(response.status().is_client_error() || response.status().is_server_error());
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_content_type_validation() {
         // Test that endpoint properly handles different content types
         let app = create_test_router();
@@ -530,7 +555,7 @@ mod vision_tests {
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        
+
         // Should still be processed (axum is lenient with JSON)
         // The response should indicate proper processing attempt
         assert!(response.status().is_client_error() || response.status().is_server_error());

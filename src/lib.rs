@@ -25,6 +25,8 @@ pub mod tools;
 #[cfg(feature = "vision")]
 pub mod vision;
 #[cfg(feature = "vision")]
+pub mod vision_adapter;
+#[cfg(feature = "vision")]
 pub mod vision_license;
 pub mod util {
     pub mod diag;
@@ -47,7 +49,7 @@ pub struct AppState {
     pub observability: observability::ObservabilityManager,
     pub response_cache: cache::ResponseCache,
     #[cfg(feature = "vision")]
-    pub vision_license_manager: Option<crate::vision_license::VisionLicenseManager>,
+    pub vision_provider: Box<dyn vision_adapter::VisionProvider + Send + Sync>,
 }
 
 impl AppState {
@@ -61,7 +63,7 @@ impl AppState {
             observability: observability::ObservabilityManager::new(),
             response_cache: cache::ResponseCache::new(),
             #[cfg(feature = "vision")]
-            vision_license_manager: Some(crate::vision_license::VisionLicenseManager::new()),
+            vision_provider: Box::new(vision_adapter::PrivateVisionProvider),
         }
     }
 }

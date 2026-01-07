@@ -5,33 +5,34 @@
 
 #[cfg(feature = "vision")]
 use shimmy::vision::{
-    VisionRequest, VisionResponse, TextBlock, Layout, Visual, Interaction,
-    DomElement, Rect, Meta, Region, UIElement, Contrast,
+    Contrast, DomElement, Interaction, Layout, Meta, Rect, Region, TextBlock, UIElement,
+    VisionRequest, VisionResponse, Visual,
 };
 
 #[cfg(feature = "vision")]
 mod vision_tests {
     use super::*;
     use base64::{engine::general_purpose, Engine as _};
-    use image::{ColorType, ImageEncoder, codecs::png::PngEncoder};
-    use std::collections::HashMap;
+    use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
     use serde_json;
     use serial_test::serial;
+    use std::collections::HashMap;
 
     // Test helper functions
     fn create_test_image(width: u32, height: u32) -> Vec<u8> {
         let img = image::RgbImage::from_fn(width, height, |x, y| {
             let r = (x % 256) as u8;
-            let g = (y % 256) as u8; 
+            let g = (y % 256) as u8;
             let b = ((x.wrapping_add(y)) % 256) as u8;
             image::Rgb([r, g, b])
         });
-        
+
         let mut png_bytes = Vec::new();
         let encoder = PngEncoder::new(&mut png_bytes);
-        encoder.write_image(img.as_raw(), width, height, ColorType::Rgb8)
+        encoder
+            .write_image(img.as_raw(), width, height, ColorType::Rgb8)
             .expect("Failed to encode test image as PNG");
-        
+
         png_bytes
     }
 
@@ -143,7 +144,7 @@ mod vision_tests {
     fn test_preprocess_image_resize_by_pixels() {
         let png_bytes = create_test_image(1200, 1200);
         let cfg = shimmy::vision::PreprocessConfig {
-            max_long_edge: 2000, // High enough to not trigger
+            max_long_edge: 2000,   // High enough to not trigger
             max_pixels: 1_000_000, // 1M pixels limit
         };
 
@@ -287,7 +288,10 @@ mod vision_tests {
 ```"#;
         let (result, warnings) = shimmy::vision::extract_json_candidate(raw_output);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), r#"{"text_blocks": [{"text": "Hello", "confidence": 0.9}]}"#);
+        assert_eq!(
+            result.unwrap(),
+            r#"{"text_blocks": [{"text": "Hello", "confidence": 0.9}]}"#
+        );
         assert_eq!(warnings, vec!["Stripped markdown code fences"]);
     }
 
@@ -296,8 +300,14 @@ mod vision_tests {
         let raw_output = r#"Here is the analysis: {"text_blocks": [{"text": "Hello", "confidence": 0.9}]} and that's it."#;
         let (result, warnings) = shimmy::vision::extract_json_candidate(raw_output);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), r#"{"text_blocks": [{"text": "Hello", "confidence": 0.9}]}"#);
-        assert_eq!(warnings, vec!["Extracted JSON object from surrounding text"]);
+        assert_eq!(
+            result.unwrap(),
+            r#"{"text_blocks": [{"text": "Hello", "confidence": 0.9}]}"#
+        );
+        assert_eq!(
+            warnings,
+            vec!["Extracted JSON object from surrounding text"]
+        );
     }
 
     #[test]
@@ -408,7 +418,7 @@ mod vision_tests {
             1000,
             "raw output",
             None,
-            None
+            None,
         );
 
         assert!(result.is_ok());
@@ -427,7 +437,10 @@ mod vision_tests {
         assert_eq!(response.visual.accent_colors.len(), 2);
         assert!(response.visual.contrast.is_some());
 
-        assert_eq!(response.interaction.description, Some("Click the button to proceed".to_string()));
+        assert_eq!(
+            response.interaction.description,
+            Some("Click the button to proceed".to_string())
+        );
         assert_eq!(response.meta.model, "test-model");
         assert_eq!(response.meta.duration_ms, 1000);
         assert!(response.raw_model_output.is_none()); // raw=false
@@ -468,7 +481,7 @@ mod vision_tests {
             1000,
             "raw output",
             None,
-            None
+            None,
         );
 
         assert!(result.is_ok());
@@ -507,7 +520,7 @@ mod vision_tests {
             500,
             "raw output text",
             Some(vec!["warning".to_string()]),
-            None
+            None,
         );
 
         assert!(result.is_ok());
@@ -522,8 +535,14 @@ mod vision_tests {
         assert!(response.interaction.description.is_none());
         assert!(response.dom_map.is_none());
         assert_eq!(response.meta.duration_ms, 500);
-        assert_eq!(response.meta.parse_warnings, Some(vec!["warning".to_string()]));
-        assert_eq!(response.raw_model_output, Some("raw output text".to_string()));
+        assert_eq!(
+            response.meta.parse_warnings,
+            Some(vec!["warning".to_string()])
+        );
+        assert_eq!(
+            response.raw_model_output,
+            Some("raw output text".to_string())
+        );
     }
 
     #[test]
@@ -542,13 +561,8 @@ mod vision_tests {
             viewport_height: None,
         };
 
-        let result = shimmy::vision::parse_vision_output(
-            raw_output,
-            &req,
-            "test-model",
-            1000,
-            None
-        );
+        let result =
+            shimmy::vision::parse_vision_output(raw_output, &req, "test-model", 1000, None);
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -573,21 +587,22 @@ mod vision_tests {
             viewport_height: None,
         };
 
-        let result = shimmy::vision::parse_vision_output(
-            raw_output,
-            &req,
-            "test-model",
-            1000,
-            None
-        );
+        let result =
+            shimmy::vision::parse_vision_output(raw_output, &req, "test-model", 1000, None);
 
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.text_blocks.len(), 1);
         assert_eq!(response.text_blocks[0].text, "This is not JSON at all");
         assert_eq!(response.text_blocks[0].confidence, Some(0.5));
-        assert_eq!(response.visual.description, Some("Analysis completed".to_string()));
-        assert_eq!(response.meta.parse_warnings, Some(vec!["Could not parse structured output".to_string()]));
+        assert_eq!(
+            response.visual.description,
+            Some("Analysis completed".to_string())
+        );
+        assert_eq!(
+            response.meta.parse_warnings,
+            Some(vec!["Could not parse structured output".to_string()])
+        );
     }
 
     #[test]
@@ -636,7 +651,7 @@ mod vision_tests {
     #[test]
     fn test_vision_request_invalid_base64() {
         let invalid_base64 = "not_valid_base64!!!";
-        
+
         // Test that base64 decoding would fail
         let decode_result = general_purpose::STANDARD.decode(invalid_base64);
         assert!(decode_result.is_err());
@@ -645,7 +660,7 @@ mod vision_tests {
     #[test]
     fn test_vision_request_empty_base64() {
         let empty_base64 = "";
-        
+
         // Test that empty base64 decodes to empty data
         let decode_result = general_purpose::STANDARD.decode(empty_base64);
         assert!(decode_result.is_ok());
@@ -656,31 +671,33 @@ mod vision_tests {
     fn test_check_ollama_model_exists_mock() {
         // This function calls external ollama command, so we just test the logic structure
         let model_name = "registry.ollama.ai/library/minicpm-v:latest";
-        
+
         // Test that registry prefix gets stripped correctly for the lookup
-        let actual_model_name = if let Some(stripped) = model_name.strip_prefix("registry.ollama.ai/library/") {
-            stripped.replace('/', ":")
-        } else {
-            model_name.to_string()
-        };
-        
+        let actual_model_name =
+            if let Some(stripped) = model_name.strip_prefix("registry.ollama.ai/library/") {
+                stripped.replace('/', ":")
+            } else {
+                model_name.to_string()
+            };
+
         assert_eq!(actual_model_name, "minicpm-v:latest");
     }
 
     #[test]
     fn test_check_ollama_model_exists_no_prefix() {
         let model_name = "llava:latest";
-        
-        let actual_model_name = if let Some(stripped) = model_name.strip_prefix("registry.ollama.ai/library/") {
-            stripped.replace('/', ":")
-        } else {
-            model_name.to_string()
-        };
-        
+
+        let actual_model_name =
+            if let Some(stripped) = model_name.strip_prefix("registry.ollama.ai/library/") {
+                stripped.replace('/', ":")
+            } else {
+                model_name.to_string()
+            };
+
         assert_eq!(actual_model_name, "llava:latest");
     }
 
-    #[test] 
+    #[test]
     fn test_dom_element_structure() {
         let dom_element = DomElement {
             tag: "button".to_string(),
@@ -720,26 +737,20 @@ mod vision_tests {
             image_path: None,
             url: Some("https://example.com".to_string()),
             mode: "web".to_string(),
-            text_blocks: vec![
-                TextBlock {
-                    text: "Header text".to_string(),
-                    confidence: Some(0.95),
-                }
-            ],
+            text_blocks: vec![TextBlock {
+                text: "Header text".to_string(),
+                confidence: Some(0.95),
+            }],
             layout: Layout {
                 theme: Some("light".to_string()),
-                regions: vec![
-                    Region {
-                        name: "header".to_string(),
-                        description: "Top navigation area".to_string(),
-                    }
-                ],
-                key_ui_elements: vec![
-                    UIElement {
-                        name: "menu_button".to_string(),
-                        element_type: "button".to_string(),
-                    }
-                ],
+                regions: vec![Region {
+                    name: "header".to_string(),
+                    description: "Top navigation area".to_string(),
+                }],
+                key_ui_elements: vec![UIElement {
+                    name: "menu_button".to_string(),
+                    element_type: "button".to_string(),
+                }],
             },
             visual: Visual {
                 background: Some("#ffffff".to_string()),
@@ -780,7 +791,10 @@ mod vision_tests {
             let req = serde_json::Value::Null;
             let result = shimmy::vision::handle_vision_request(req);
             assert!(result.is_err());
-            assert_eq!(result.unwrap_err().to_string(), "Vision feature not enabled");
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Vision feature not enabled"
+            );
         }
     }
 
@@ -811,7 +825,7 @@ mod vision_tests {
         let result = shimmy::vision::preprocess_image(&png_bytes, &cfg);
         assert!(result.is_ok());
         let preprocessed = result.unwrap();
-        
+
         // Verify it respects both constraints
         assert!(preprocessed.width.max(preprocessed.height) <= cfg.max_long_edge);
         assert!((preprocessed.width as u64 * preprocessed.height as u64) <= cfg.max_pixels);
@@ -846,18 +860,21 @@ mod vision_tests {
     fn test_parse_structured_output_with_captured_dom() {
         let json_str = r#"{"text_blocks": [{"text": "Test", "confidence": 0.9}]}"#;
         let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
-        
-        let captured_dom = vec![
-            DomElement {
-                tag: "div".to_string(),
-                id: None,
-                class: Some("container".to_string()),
-                text: Some("Content".to_string()),
-                position: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-                attributes: HashMap::new(),
-                colors: None,
-            }
-        ];
+
+        let captured_dom = vec![DomElement {
+            tag: "div".to_string(),
+            id: None,
+            class: Some("container".to_string()),
+            text: Some("Content".to_string()),
+            position: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            attributes: HashMap::new(),
+            colors: None,
+        }];
 
         let req = VisionRequest {
             image_base64: None,
@@ -879,7 +896,7 @@ mod vision_tests {
             1000,
             "raw output",
             None,
-            Some(captured_dom)
+            Some(captured_dom),
         );
 
         assert!(result.is_ok());

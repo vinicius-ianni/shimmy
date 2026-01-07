@@ -150,7 +150,10 @@ mod vision_license_tests {
         manager.set_usage_stats(usage_stats).await;
 
         let result = manager.check_vision_access(Some("limited-license")).await;
-        assert!(matches!(result, Err(VisionLicenseError::UsageLimitExceeded)));
+        assert!(matches!(
+            result,
+            Err(VisionLicenseError::UsageLimitExceeded)
+        ));
 
         env::remove_var("KEYGEN_API_KEY");
     }
@@ -158,7 +161,6 @@ mod vision_license_tests {
     #[tokio::test]
     #[serial]
     async fn test_usage_tracking_increments_correctly() {
-
         let (manager, _temp_dir) = create_test_manager().await;
 
         // Reset usage stats to known state
@@ -203,14 +205,16 @@ mod vision_license_tests {
             expires_at: None,
         };
 
-        manager.set_cached_license(Some(cached_license.clone())).await;
+        manager
+            .set_cached_license(Some(cached_license.clone()))
+            .await;
 
         // First call should use cache
         let result1 = manager.validate_license("cached-license").await.unwrap();
-        
+
         // Second call should also use cache (not make API call)
         let result2 = manager.validate_license("cached-license").await.unwrap();
-        
+
         assert_eq!(result1.valid, result2.valid);
         assert_eq!(result1.entitlements, result2.entitlements);
 
@@ -298,13 +302,15 @@ mod vision_license_tests {
 
         let result = manager.validate_license("any-license").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("environment variable"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("environment variable"));
     }
 
     #[tokio::test]
     #[serial]
     async fn test_cache_persistence_across_manager_instances() {
-
         // Create first manager and save some cache data
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let cache_dir = temp_dir.path().join("shimmy").join("vision");
@@ -366,7 +372,10 @@ mod vision_license_tests {
 
         assert!(json["error"].is_object());
         assert_eq!(json["error"]["code"], "MISSING_LICENSE");
-        assert!(json["error"]["message"].as_str().unwrap().contains("No license key"));
+        assert!(json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("No license key"));
     }
 
     #[tokio::test]

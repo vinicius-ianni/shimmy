@@ -1,5 +1,5 @@
 //! Focused unit tests for vision_license.rs core functions
-//! 
+//!
 //! Testing the specific functions required:
 //! - VisionLicenseError methods (public)
 //! - VisionLicenseManager public methods
@@ -16,22 +16,22 @@ mod tests {
             VisionLicenseError::MissingLicense.to_status_code(),
             axum::http::StatusCode::PAYMENT_REQUIRED
         );
-        
+
         assert_eq!(
             VisionLicenseError::ValidationFailed("test".to_string()).to_status_code(),
             axum::http::StatusCode::INTERNAL_SERVER_ERROR
         );
-        
+
         assert_eq!(
             VisionLicenseError::InvalidLicense.to_status_code(),
             axum::http::StatusCode::FORBIDDEN
         );
-        
+
         assert_eq!(
             VisionLicenseError::FeatureNotEnabled.to_status_code(),
             axum::http::StatusCode::FORBIDDEN
         );
-        
+
         assert_eq!(
             VisionLicenseError::UsageLimitExceeded.to_status_code(),
             axum::http::StatusCode::PAYMENT_REQUIRED
@@ -46,10 +46,14 @@ mod tests {
         assert_eq!(missing["error"]["code"], "MISSING_LICENSE");
         assert_eq!(missing["error"]["message"], "No license key provided");
 
-        let validation = VisionLicenseError::ValidationFailed("timeout".to_string()).to_json_error();
+        let validation =
+            VisionLicenseError::ValidationFailed("timeout".to_string()).to_json_error();
         assert!(validation["error"].is_object());
         assert_eq!(validation["error"]["code"], "VALIDATION_ERROR");
-        assert_eq!(validation["error"]["message"], "License validation failed: timeout");
+        assert_eq!(
+            validation["error"]["message"],
+            "License validation failed: timeout"
+        );
 
         let invalid = VisionLicenseError::InvalidLicense.to_json_error();
         assert!(invalid["error"].is_object());
@@ -59,7 +63,10 @@ mod tests {
         let disabled = VisionLicenseError::FeatureNotEnabled.to_json_error();
         assert!(disabled["error"].is_object());
         assert_eq!(disabled["error"]["code"], "FEATURE_DISABLED");
-        assert_eq!(disabled["error"]["message"], "Vision feature not enabled for this license");
+        assert_eq!(
+            disabled["error"]["message"],
+            "Vision feature not enabled for this license"
+        );
 
         let exceeded = VisionLicenseError::UsageLimitExceeded.to_json_error();
         assert!(exceeded["error"].is_object());
@@ -89,26 +96,29 @@ mod tests {
     async fn test_missing_license() {
         let manager = VisionLicenseManager::new();
         let result = manager.check_vision_access(None).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VisionLicenseError::MissingLicense));
+        assert!(matches!(
+            result.unwrap_err(),
+            VisionLicenseError::MissingLicense
+        ));
     }
 
     // Test record usage
     #[tokio::test]
     async fn test_record_usage() {
         let manager = VisionLicenseManager::new();
-        
+
         // Should not panic or return error
         let result = manager.record_usage().await;
         assert!(result.is_ok());
     }
 
     // Test loading cache (should not fail even if no cache exists)
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_load_cache() {
         let manager = VisionLicenseManager::new();
-        
+
         // Should not fail even if no cache file exists
         let result = manager.load_cache().await;
         assert!(result.is_ok());

@@ -81,14 +81,15 @@ async fn test_live_valid_license() {
     let manager = VisionLicenseManager::new();
 
     // Set the API key from env
-    env::set_var(
-        "KEYGEN_API_KEY",
-        env::var("KEYGEN_PRODUCT_TOKEN").unwrap(),
-    );
+    env::set_var("KEYGEN_API_KEY", env::var("KEYGEN_PRODUCT_TOKEN").unwrap());
 
     let result = manager.validate_license(&license_key).await;
 
-    assert!(result.is_ok(), "Valid license should validate: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Valid license should validate: {:?}",
+        result
+    );
     let validation = result.unwrap();
     assert!(validation.valid, "License should be valid");
     assert!(
@@ -110,14 +111,15 @@ async fn test_live_expired_license() {
     let license_key = get_test_key("KEYGEN_TEST_LICENSE_EXPIRED").unwrap();
     let manager = VisionLicenseManager::new();
 
-    env::set_var(
-        "KEYGEN_API_KEY",
-        env::var("KEYGEN_PRODUCT_TOKEN").unwrap(),
-    );
+    env::set_var("KEYGEN_API_KEY", env::var("KEYGEN_PRODUCT_TOKEN").unwrap());
 
     let result = manager.validate_license(&license_key).await;
 
-    assert!(result.is_ok(), "Should get validation response: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Should get validation response: {:?}",
+        result
+    );
     let validation = result.unwrap();
     assert!(!validation.valid, "Expired license should be invalid");
 
@@ -143,14 +145,15 @@ async fn test_live_suspended_license() {
     let license_key = get_test_key("KEYGEN_TEST_LICENSE_SUSPENDED").unwrap();
     let manager = VisionLicenseManager::new();
 
-    env::set_var(
-        "KEYGEN_API_KEY",
-        env::var("KEYGEN_PRODUCT_TOKEN").unwrap(),
-    );
+    env::set_var("KEYGEN_API_KEY", env::var("KEYGEN_PRODUCT_TOKEN").unwrap());
 
     let result = manager.validate_license(&license_key).await;
 
-    assert!(result.is_ok(), "Should get validation response: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Should get validation response: {:?}",
+        result
+    );
     let validation = result.unwrap();
     assert!(!validation.valid, "Suspended license should be invalid");
 
@@ -175,16 +178,20 @@ async fn test_live_missing_entitlement() {
     let license_key = get_test_key("KEYGEN_TEST_LICENSE_NO_ENTITLEMENT").unwrap();
     let manager = VisionLicenseManager::new();
 
-    env::set_var(
-        "KEYGEN_API_KEY",
-        env::var("KEYGEN_PRODUCT_TOKEN").unwrap(),
-    );
+    env::set_var("KEYGEN_API_KEY", env::var("KEYGEN_PRODUCT_TOKEN").unwrap());
 
     let result = manager.validate_license(&license_key).await;
 
-    assert!(result.is_ok(), "Should get validation response: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Should get validation response: {:?}",
+        result
+    );
     let validation = result.unwrap();
-    assert!(!validation.valid, "License without entitlement should be invalid");
+    assert!(
+        !validation.valid,
+        "License without entitlement should be invalid"
+    );
 
     let code = validation
         .meta
@@ -209,15 +216,18 @@ async fn test_live_invalid_license_key() {
 
     let manager = VisionLicenseManager::new();
 
-    env::set_var(
-        "KEYGEN_API_KEY",
-        env::var("KEYGEN_PRODUCT_TOKEN").unwrap(),
-    );
+    env::set_var("KEYGEN_API_KEY", env::var("KEYGEN_PRODUCT_TOKEN").unwrap());
 
     // Use a fake license key
-    let result = manager.validate_license("FAKE00-LICENSE-KEY123-NOTREAL-000000-V3").await;
+    let result = manager
+        .validate_license("FAKE00-LICENSE-KEY123-NOTREAL-000000-V3")
+        .await;
 
-    assert!(result.is_ok(), "Should get validation response: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Should get validation response: {:?}",
+        result
+    );
     let validation = result.unwrap();
     assert!(!validation.valid, "Fake license should be invalid");
 
@@ -242,10 +252,7 @@ async fn test_live_signature_verification() {
     let license_key = get_test_key("KEYGEN_TEST_LICENSE_VALID").unwrap();
     let manager = VisionLicenseManager::new();
 
-    env::set_var(
-        "KEYGEN_API_KEY",
-        env::var("KEYGEN_PRODUCT_TOKEN").unwrap(),
-    );
+    env::set_var("KEYGEN_API_KEY", env::var("KEYGEN_PRODUCT_TOKEN").unwrap());
 
     // This should succeed because Keygen signs all responses
     // If signature verification was broken, this would fail
@@ -271,10 +278,7 @@ async fn test_live_multiple_validations() {
     let license_key = get_test_key("KEYGEN_TEST_LICENSE_VALID").unwrap();
     let manager = VisionLicenseManager::new();
 
-    env::set_var(
-        "KEYGEN_API_KEY",
-        env::var("KEYGEN_PRODUCT_TOKEN").unwrap(),
-    );
+    env::set_var("KEYGEN_API_KEY", env::var("KEYGEN_PRODUCT_TOKEN").unwrap());
 
     // Run 3 consecutive validations
     for i in 1..=3 {
@@ -305,13 +309,14 @@ async fn test_live_user_agent_sent() {
     let license_key = get_test_key("KEYGEN_TEST_LICENSE_VALID").unwrap();
     let manager = VisionLicenseManager::new();
 
-    env::set_var(
-        "KEYGEN_API_KEY",
-        env::var("KEYGEN_PRODUCT_TOKEN").unwrap(),
-    );
+    env::set_var("KEYGEN_API_KEY", env::var("KEYGEN_PRODUCT_TOKEN").unwrap());
 
     let result = manager.validate_license(&license_key).await;
-    assert!(result.is_ok(), "Should work with custom User-Agent: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Should work with custom User-Agent: {:?}",
+        result
+    );
 }
 
 // ============================================================================
@@ -337,10 +342,7 @@ async fn test_live_smoke_test() {
     let license_key = get_test_key("KEYGEN_TEST_LICENSE_VALID").unwrap();
     let manager = VisionLicenseManager::new();
 
-    env::set_var(
-        "KEYGEN_API_KEY",
-        env::var("KEYGEN_PRODUCT_TOKEN").unwrap(),
-    );
+    env::set_var("KEYGEN_API_KEY", env::var("KEYGEN_PRODUCT_TOKEN").unwrap());
 
     let result = manager.validate_license(&license_key).await;
 

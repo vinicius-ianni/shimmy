@@ -164,7 +164,7 @@ pub fn preprocess_config_for_mode(mode: Option<&str>) -> PreprocessConfig {
     // Web pages often have lots of fine text, so we prioritize fitting
     // in memory over maximum resolution.
     let is_web_mode = mode.map(|m| m == "web").unwrap_or(false);
-    
+
     let default_long_edge = if is_web_mode { 512 } else { 640 };
     let default_pixels = if is_web_mode { 400_000 } else { 1_500_000 };
 
@@ -246,7 +246,10 @@ pub async fn process_vision_request(
             match capture_screenshot_and_dom(url, viewport_width, viewport_height).await {
                 Ok((screenshot_data, dom_elements)) => (screenshot_data, Some(dom_elements)),
                 Err(e) => {
-                    tracing::warn!("Screenshot capture failed: {}. Falling back to URL fetch.", e);
+                    tracing::warn!(
+                        "Screenshot capture failed: {}. Falling back to URL fetch.",
+                        e
+                    );
                     // Fall back to fetching URL as image
                     let data = fetch_image_from_url(url).await?;
                     (data, None)
@@ -276,8 +279,12 @@ pub async fn process_vision_request(
     // Preprocess image to a safe size/format for the vision backend
     // Web mode uses smaller defaults to reduce tile count for MiniCPM-V
     let preprocess_cfg = preprocess_config_for_mode(Some(req.mode.as_str()));
-    tracing::debug!("Preprocess config for mode '{}': max_long_edge={}, max_pixels={}", 
-                    req.mode, preprocess_cfg.max_long_edge, preprocess_cfg.max_pixels);
+    tracing::debug!(
+        "Preprocess config for mode '{}': max_long_edge={}, max_pixels={}",
+        req.mode,
+        preprocess_cfg.max_long_edge,
+        preprocess_cfg.max_pixels
+    );
     tracing::error!("About to preprocess image: {} bytes", raw_image_data.len());
     let preprocessed = preprocess_image(&raw_image_data, &preprocess_cfg)
         .map_err(|e| format!("Failed to preprocess image: {}", e))?;
@@ -503,9 +510,7 @@ async fn capture_screenshot_and_dom(
         .map_err(|e| anyhow::anyhow!("Failed to launch browser: {}", e))?;
 
     // Spawn handler to process browser events in background
-    let handler_task = tokio::spawn(async move {
-        while (handler.next().await).is_some() {}
-    });
+    let handler_task = tokio::spawn(async move { while (handler.next().await).is_some() {} });
 
     // Create new page
     let page = browser
@@ -623,7 +628,9 @@ fn is_private_or_local_ip(ip: std::net::IpAddr) -> bool {
 
 /// Extract interactive DOM elements from the page
 #[cfg(feature = "vision")]
-async fn extract_dom_elements(page: &chromiumoxide::Page) -> Result<Vec<DomElement>, anyhow::Error> {
+async fn extract_dom_elements(
+    page: &chromiumoxide::Page,
+) -> Result<Vec<DomElement>, anyhow::Error> {
     // Get all interactive elements via JavaScript
     let script = r#"
         (function getInteractiveElements() {
@@ -687,8 +694,14 @@ async fn extract_dom_elements(page: &chromiumoxide::Page) -> Result<Vec<DomEleme
             Some(DomElement {
                 tag: el.get("tag")?.as_str()?.to_string(),
                 id: el.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                class: el.get("class").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                text: el.get("text").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                class: el
+                    .get("class")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                text: el
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 position: el.get("position").and_then(|p| {
                     Some(Rect {
                         x: p.get("x")?.as_f64()? as f32,
@@ -857,12 +870,7 @@ mod tests {
 
     #[test]
     fn prepare_vision_prompt_is_compact_and_json_only() {
-        let p = prepare_vision_prompt(
-            "full",
-            640,
-            480,
-            "minicpm-v",
-        );
+        let p = prepare_vision_prompt("full", 640, 480, "minicpm-v");
         assert!(p.contains("valid JSON"));
         assert!(!p.contains("```"));
         assert!(p.contains("text_blocks"));
@@ -1190,14 +1198,11 @@ pub fn parse_structured_output(
                                 .collect()
                         })
                         .unwrap_or_default(),
-                    colors: item
-                        .get("colors")
-                        .and_then(|c| c.as_object())
-                        .map(|obj| {
-                            obj.iter()
-                                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                                .collect()
-                        }),
+                    colors: item.get("colors").and_then(|c| c.as_object()).map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    }),
                 })
             })
             .collect::<Vec<_>>()
@@ -1274,10 +1279,12 @@ fn minicpm_bootstrap_mutex() -> &'static tokio::sync::Mutex<()> {
 async fn ensure_minicpm_v_files(
     auto_download: bool,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), Box<dyn std::error::Error>> {
-    const MODEL_URL: &str = "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-Q4_K_M.gguf";
+    const MODEL_URL: &str =
+        "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-Q4_K_M.gguf";
     const MODEL_SHA256_HEX: &str =
         "3a4078d53b46f22989adbf998ce5a3fd090b6541f112d7e936eb4204a04100b1";
-    const PROJ_URL: &str = "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf";
+    const PROJ_URL: &str =
+        "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf";
     const PROJ_SHA256_HEX: &str =
         "4485f68a0f1aa404c391e788ea88ea653c100d8e98fe572698f701e5809711fd";
 

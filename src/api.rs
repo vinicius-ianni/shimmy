@@ -1142,6 +1142,7 @@ pub async fn vision(
 
     // Use default vision model or specified one
     let env_model = std::env::var("SHIMMY_VISION_MODEL").ok();
+    #[cfg(feature = "vision")]
     let model_name = req
         .model
         .as_deref()
@@ -1149,19 +1150,20 @@ pub async fn vision(
         .unwrap_or("minicpm-v")
         .to_string();
 
-    let Some(license_manager) = state.vision_license_manager.as_ref() else {
-        tracing::error!("Vision license manager not initialized");
+    #[cfg(not(feature = "vision"))]
+    {
+        tracing::error!("Vision feature not enabled");
         return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::http::StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": {
-                    "code": "VISION_LICENSE_MANAGER_MISSING",
-                    "message": "Vision subsystem not initialized",
+                    "code": "VISION_FEATURE_DISABLED",
+                    "message": "Vision feature not enabled. This is a licensed feature.",
                 }
             })),
         )
             .into_response();
-    };
+    }
 
     fn map_vision_error_status(message: &str) -> axum::http::StatusCode {
         if message.contains("Either image_base64 or url must be provided") {
@@ -1194,22 +1196,21 @@ pub async fn vision(
         axum::http::StatusCode::INTERNAL_SERVER_ERROR
     }
 
-    match crate::vision::process_vision_request(
-        req,
-        &model_name,
-        license_manager,
-        &state,
-    )
-    .await
+    // For now, during migration, call the old vision function directly
+    // TODO: Use the provider once it's properly implemented
+    match state
+        .vision_provider
+        .process_vision_request(req, model_name, &state)
+        .await
     {
-        Ok(response) => Json(response).into_response(),
+        Ok(response) => axum::Json(response).into_response(),
         Err(e) => {
             // Check if it's a license error
             if let Some(license_err) = e.downcast_ref::<crate::vision_license::VisionLicenseError>()
             {
                 return (
                     license_err.to_status_code(),
-                    Json(license_err.to_json_error()),
+                    axum::Json(license_err.to_json_error()),
                 )
                     .into_response();
             }
@@ -1220,11 +1221,12 @@ pub async fn vision(
             tracing::error!(status = %status, "Vision processing error: {}", full_message);
             // Expose client error messages (4xx) to help users fix their requests.
             // Hide server error details (5xx) unless running in dev mode.
-            let message = if status.is_client_error() || std::env::var("SHIMMY_VISION_DEV_MODE").is_ok() {
-                full_message
-            } else {
-                "Vision processing error".to_string()
-            };
+            let message =
+                if status.is_client_error() || std::env::var("SHIMMY_VISION_DEV_MODE").is_ok() {
+                    full_message
+                } else {
+                    "Vision processing error".to_string()
+                };
 
             (
                 status,

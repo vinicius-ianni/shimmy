@@ -838,6 +838,16 @@ async function createStripeCheckoutSession(env, params) {
   body.set('line_items[0][quantity]', '1');
   body.set('metadata[tier]', params.tier);
 
+  // For lifetime (one-time payment), prioritize WeChat Pay and Alipay at top
+  if (params.tier === 'lifetime') {
+    body.set('payment_method_types[0]', 'wechat_pay');
+    body.set('payment_method_types[1]', 'alipay');
+    body.set('payment_method_types[2]', 'card');
+    body.set('payment_method_types[3]', 'link');
+    // WeChat Pay requires payment_method_options
+    body.set('payment_method_options[wechat_pay][client]', 'web');
+  }
+
   // Stripe Accounts v2 (test mode) may require an existing customer.
   if (params.requireCustomer) {
     const customer = await createStripeCustomer(env, params.email);

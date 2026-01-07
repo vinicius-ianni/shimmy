@@ -1061,7 +1061,7 @@ impl LoadedModel for LlamaFallback {
         _image_data: &[u8],
         prompt: &str,
         _opts: GenOptions,
-        on_token: Option<Box<dyn FnMut(String) + Send>>,
+        mut on_token: Option<Box<dyn FnMut(String) + Send>>,
     ) -> Result<String> {
         let fallback_msg =
             "Llama.cpp support not enabled. Build with --features llama for vision functionality.";

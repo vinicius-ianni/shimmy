@@ -36,7 +36,7 @@ full = ["huggingface", "llama", "mlx"] # Full compilation - includes all backend
 gpu = ["huggingface", "llama-cuda", "llama-vulkan", "llama-opencl"] # GPU-optimized build
 apple = ["huggingface", "mlx"] # Apple Silicon optimized - MLX + HuggingFace
 coverage = ["huggingface"] # Coverage testing - minimal deps for faster builds
-vision = ["dep:image", "dep:base64", "dep:chromiumoxide", "dep:ed25519-dalek", "dep:hex", "dep:sha2"] # Optional vision feature for image/web analysis
+vision = ["dep:shimmy-vision", "dep:image", "dep:base64", "dep:chromiumoxide", "dep:ed25519-dalek", "dep:hex", "dep:sha2"] # Optional vision feature for image/web analysis
 
 [dependencies]
 anyhow = "1"
@@ -76,6 +76,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # llama.cpp bindings (optional) - published shimmy-llama-cpp-2 with MoE CPU offloading support
 shimmy-llama-cpp-2 = { version = "0.1.123", optional = true, default-features = false }
 
+# Private vision crate (optional) - licensed vision processing
+shimmy-vision = { git = "https://github.com/Michael-A-Kuykendall/shimmy-vision-private.git", optional = true }
+
 [dev-dependencies]
 tokio-tungstenite = "0.20"
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -111,4 +114,7 @@ harness = false
 [[bench]]
 name = "generation_performance"
 harness = false
+
+
+[workspace]
 

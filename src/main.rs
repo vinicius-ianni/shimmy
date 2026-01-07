@@ -19,6 +19,8 @@ mod templates;
 #[cfg(feature = "vision")]
 mod vision;
 #[cfg(feature = "vision")]
+mod vision_adapter;
+#[cfg(feature = "vision")]
 mod vision_license;
 mod util {
     pub mod diag;
@@ -39,34 +41,31 @@ pub struct AppState {
     pub observability: observability::ObservabilityManager,
     pub response_cache: cache::ResponseCache,
     #[cfg(feature = "vision")]
-    #[cfg(feature = "vision")]
-    pub vision_license_manager: Option<crate::vision_license::VisionLicenseManager>,
+    pub vision_provider: Box<dyn vision_adapter::VisionProvider + Send + Sync>,
 }
 
 impl AppState {
     pub fn new(engine: Box<dyn engine::InferenceEngine>, registry: Registry) -> Self {
+        #[allow(unused_mut)]
         let mut state = Self {
             engine,
             registry,
             observability: observability::ObservabilityManager::new(),
             response_cache: cache::ResponseCache::new(),
             #[cfg(feature = "vision")]
-            #[cfg(feature = "vision")]
-            vision_license_manager: None,
+            vision_provider: Box::new(vision_adapter::PrivateVisionProvider),
         };
 
         #[cfg(feature = "vision")]
         {
-            state.vision_license_manager = Some(crate::vision_license::VisionLicenseManager::new());
             // Load license cache asynchronously
-            if let Some(manager) = &state.vision_license_manager {
-                let manager = manager.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = manager.load_cache().await {
-                        tracing::warn!("Failed to load vision license cache: {}", e);
-                    }
-                });
-            }
+            #[allow(unused_variables)]
+            let provider = state.vision_provider.as_ref();
+            // Note: License cache loading will be handled by the private crate
+            tokio::spawn(async move {
+                // The private crate handles its own cache loading
+                tracing::info!("Vision provider initialized");
+            });
         }
 
         state

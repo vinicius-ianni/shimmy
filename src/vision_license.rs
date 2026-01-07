@@ -30,7 +30,8 @@ pub const KEYGEN_ACCOUNT_ID: &str = "6270bf9c-23ad-4483-9296-3a6d9178514a";
 /// Used to verify API response signatures, preventing MITM and replay attacks.
 /// Format: Hex-encoded 32-byte Ed25519 public key
 #[cfg(feature = "vision")]
-pub const KEYGEN_PUBLIC_KEY: &str = "42f313585a72a41513208800f730944f1a3b74a8acfff539f96ce244d029fa5d";
+pub const KEYGEN_PUBLIC_KEY: &str =
+    "42f313585a72a41513208800f730944f1a3b74a8acfff539f96ce244d029fa5d";
 
 /// Shimmy version for User-Agent header (helps Keygen detect cracks)
 #[cfg(feature = "vision")]
@@ -253,9 +254,7 @@ impl VisionLicenseManager {
             std::env::consts::OS,
             std::env::consts::ARCH
         );
-        let client = reqwest::Client::builder()
-            .user_agent(&user_agent)
-            .build()?;
+        let client = reqwest::Client::builder().user_agent(&user_agent).build()?;
 
         // Include entitlements and policy in response for full license context
         let url = format!(
@@ -363,11 +362,7 @@ impl VisionLicenseManager {
             // Per Keygen docs: https://keygen.sh/docs/api/signatures/#response-signatures
             Self::check_response_freshness(date)?;
 
-            Self::verify_response_signature(
-                sig_header,
-                date,
-                &response_body,
-            )?;
+            Self::verify_response_signature(sig_header, date, &response_body)?;
         } else {
             // Log warning but don't fail - Keygen may not always send signatures
             tracing::warn!(
@@ -502,8 +497,8 @@ impl VisionLicenseManager {
         );
 
         // Decode the public key from hex
-        let public_key_bytes = hex::decode(KEYGEN_PUBLIC_KEY)
-            .map_err(|e| format!("Invalid public key hex: {}", e))?;
+        let public_key_bytes =
+            hex::decode(KEYGEN_PUBLIC_KEY).map_err(|e| format!("Invalid public key hex: {}", e))?;
 
         let public_key_array: [u8; 32] = public_key_bytes
             .try_into()
@@ -585,24 +580,28 @@ impl VisionLicenseManager {
 
     /// Set cached license (for testing only)
     #[doc(hidden)]
+    #[allow(dead_code)]
     pub async fn set_cached_license(&self, cached: Option<CachedLicense>) {
         *self.cache.write().await = cached;
     }
 
     /// Get cached license (for testing only)
     #[doc(hidden)]
+    #[allow(dead_code)]
     pub async fn get_cached_license(&self) -> Option<CachedLicense> {
         self.cache.read().await.clone()
     }
 
     /// Set usage stats (for testing only)
     #[doc(hidden)]
+    #[allow(dead_code)]
     pub async fn set_usage_stats(&self, stats: UsageStats) {
         *self.usage.write().await = stats;
     }
 
     /// Get usage stats (for testing only)
     #[doc(hidden)]
+    #[allow(dead_code)]
     pub async fn get_usage_stats(&self) -> UsageStats {
         self.usage.read().await.clone()
     }
