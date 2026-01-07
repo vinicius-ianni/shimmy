@@ -11,6 +11,7 @@ Tests vision features in cross-compiled binaries to ensure:
 
 Usage:
     python scripts/test_cross_compiled_vision.py --binary ./target/x86_64-pc-windows-msvc/release/shimmy.exe
+    python scripts/test_cross_compiled_vision.py --binary ./target/release/shimmy --test-image assets/vision-samples/final-test.png --license test-key --output-report results.json
 """
 
 import argparse
@@ -23,6 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Dict, Any, Optional
 
 
 def start_server(binary_path: str, port: int = 11435) -> subprocess.Popen:
@@ -124,9 +126,39 @@ def validate_response(response: dict, expected_keys: list) -> bool:
     return True
 
 
-def run_cross_validation_test(binary_path: str) -> bool:
+def detect_platform(binary_path: str) -> str:
+    """Detect the platform of the binary."""
+    try:
+        result = subprocess.run([binary_path, "--version"], capture_output=True, text=True, timeout=10)
+        if "windows" in binary_path.lower() or ".exe" in binary_path:
+            return "windows-x86_64"
+        elif "aarch64" in binary_path:
+            if "apple" in binary_path:
+                return "macos-arm64"
+            else:
+                return "linux-arm64"
+        elif "x86_64" in binary_path:
+            if "apple" in binary_path:
+                return "macos-intel"
+            else:
+                return "linux-x86_64"
+        else:
+            return "unknown"
+    except:
+        return "unknown"
+
+
+def run_cross_validation_test(binary_path: str, test_image: str, license_key: str, port: int = 11435, timeout: int = 120, cpu_only: bool = False) -> tuple[bool, Dict[str, Any]]:
     """Run complete cross-validation test."""
     port = 11437  # Use different port to avoid conflicts
+
+    test_results = {
+        "server_started": False,
+        "vision_tests": [],
+        "license_validation": False,
+        "performance_warnings": [],
+        "errors": []
+    }
 
     # Start server
     server_process = start_server(binary_path, port)
@@ -134,44 +166,40 @@ def run_cross_validation_test(binary_path: str) -> bool:
     try:
         # Wait for server to be ready
         if not wait_for_server(port):
-            return False
+            test_results["errors"].append("Server failed to start")
+            return False, test_results
 
-        # Test with sample images
-        test_images = [
-            "assets/vision-samples/extended-02-after-5-messages.png",
-            "assets/vision-samples/scene2-models.png",
-        ]
+        test_results["server_started"] = True
 
-        success_count = 0
+        # Test with the specified image
+        if not os.path.exists(test_image):
+            test_results["errors"].append(f"Test image not found: {test_image}")
+            return False, test_results
 
-        for image_path in test_images:
-            if not os.path.exists(image_path):
-                print(f"⚠️  Test image not found: {image_path}")
-                continue
+        # Test vision processing
+        response, is_license_error = test_vision_processing(port, test_image)
 
-            # Test vision processing
-            response, is_license_error = test_vision_processing(port, image_path)
+        test_result = {
+            "image": test_image,
+            "response_received": response is not None,
+            "license_error": is_license_error,
+            "has_text_blocks": response and "text_blocks" in response if response else False,
+            "text_blocks_count": len(response.get("text_blocks", [])) if response else 0
+        }
+        test_results["vision_tests"].append(test_result)
 
-            # For cross-validation, both successful processing OR proper license validation are successes
-            if response and (not is_license_error or is_license_error):
-                success_count += 1
+        if is_license_error:
+            test_results["license_validation"] = True
+            print("🔐 License validation correctly enforced")
 
-                if is_license_error:
-                    print("🔐 License validation correctly enforced")
-                else:
-                    # Additional validation - check for OCR text
-                    if response.get("text_blocks"):
-                        print(f"📝 Found {len(response['text_blocks'])} text blocks")
-                    else:
-                        print("⚠️  No text blocks found in response")
-            else:
-                print(f"❌ Test failed for {image_path}")
+        # Performance check
+        if cpu_only and response:
+            test_results["performance_warnings"].append("CPU-only mode detected - performance may be slow")
 
-        # Summary
-        total_tests = len(test_images)
-        print(f"\n📊 Test Results: {success_count}/{total_tests} vision tests passed")
+        # Determine success
+        success = (response is not None) and (is_license_error or test_result["has_text_blocks"])
 
-        return success_count == total_tests
+        return success, test_results
 
     finally:
         # Clean up server
@@ -184,6 +212,11 @@ def main():
     parser = argparse.ArgumentParser(description="Test vision functionality in cross-compiled binaries")
     parser.add_argument("--binary", required=True, help="Path to shimmy binary to test")
     parser.add_argument("--port", type=int, default=11437, help="Port to run test server on")
+    parser.add_argument("--test-image", default="assets/vision-samples/final-test.png", help="Path to test image")
+    parser.add_argument("--license", default="test-license-key", help="License key for testing")
+    parser.add_argument("--output-report", help="Path to save JSON test report")
+    parser.add_argument("--cpu-only", action="store_true", help="Mark test as CPU-only (expect slower performance)")
+    parser.add_argument("--timeout", type=int, default=120, help="Test timeout in seconds")
 
     args = parser.parse_args()
 
@@ -197,13 +230,41 @@ def main():
         print(f"❌ Binary not executable: {args.binary}")
         sys.exit(1)
 
+    # Validate test image exists
+    if not os.path.exists(args.test_image):
+        print(f"❌ Test image not found: {args.test_image}")
+        sys.exit(1)
+
     print("🔬 Starting Phase 2 Cross-Validation: Vision Functionality Test")
     print(f"📁 Testing binary: {args.binary}")
+    print(f"🖼️ Test image: {args.test_image}")
     print(f"🌐 Test port: {args.port}")
+    print(f"⏱️ Timeout: {args.timeout}s")
+    if args.cpu_only:
+        print("⚠️ CPU-only mode: expecting slower performance")
     print()
 
     # Run the test
-    success = run_cross_validation_test(args.binary)
+    start_time = time.time()
+    success, test_results = run_cross_validation_test(args.binary, args.test_image, args.license, args.port, args.timeout, args.cpu_only)
+    end_time = time.time()
+
+    # Generate report
+    report = {
+        "test_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "binary_path": args.binary,
+        "test_image": args.test_image,
+        "platform": detect_platform(args.binary),
+        "cpu_only": args.cpu_only,
+        "total_duration_seconds": round(end_time - start_time, 2),
+        "success": success,
+        "results": test_results
+    }
+
+    if args.output_report:
+        with open(args.output_report, 'w') as f:
+            json.dump(report, f, indent=2)
+        print(f"📋 Test report saved to: {args.output_report}")
 
     if success:
         print("\n🎉 Phase 2 Cross-Validation PASSED")

@@ -50,9 +50,9 @@ impl VisionProvider for PrivateVisionProvider {
         >,
     > {
         Box::pin(async move {
-            // For Phase 1 migration: Call existing vision processing
-            // TODO: Eventually this will call shimmy_vision::process_vision_request
-            // which will handle license validation internally
+            // TODO: Call the private shimmy-vision crate for licensed vision processing
+            // For now, call existing vision processing but skip license validation
+            // since it will be handled by the private crate
             let license_manager = crate::vision_license::VisionLicenseManager::new();
             crate::vision::process_vision_request(req, &model_name, &license_manager, state).await
         })

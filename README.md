@@ -323,9 +323,14 @@ shimmy gpu-info                 # Show GPU backend status
 
 Shimmy Vision provides AI-powered image and web page analysis with OCR, layout detection, and visual understanding. **MiniCPM-V is the vision model** — it will be automatically downloaded on first use.
 
+> **⚠️ GPU Required**: Vision processing requires a GPU for reasonable performance. CPU-only operation is extremely slow and not recommended for production use.
+
 ### Installation
 ```bash
-# Install with vision support
+# Install with vision + GPU support (recommended)
+cargo install shimmy --features llama,vision,llama-cuda
+
+# CPU-only (not recommended for vision)
 cargo install shimmy --features llama,vision
 ```
 
