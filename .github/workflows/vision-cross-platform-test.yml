@@ -253,59 +253,57 @@ jobs:
           echo "Server started with PID $SERVER_PID"
           
           # Wait for server to be ready
+          SERVER_READY="false"
           for i in {1..30}; do
             if curl -s http://127.0.0.1:11435/health > /dev/null 2>&1; then
               echo "Server is ready"
+              SERVER_READY="true"
               break
             fi
             echo "Waiting for server... ($i/30)"
             sleep 2
           done
           
-          # Download a test image
-          curl -L -o test-ocr.png "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4f/SVG_Logo.svg/320px-SVG_Logo.svg.png"
+          # Test health endpoint
+          echo "Testing health endpoint..."
+          curl -s http://127.0.0.1:11435/health > health-result.json || true
+          echo "Health check result:"
+          cat health-result.json
           
-          # Convert image to base64
-          TEST_IMAGE_B64=$(base64 -w 0 test-ocr.png)
+          # Test models endpoint (OpenAI compatible)
+          echo "Testing models endpoint..."
+          curl -s http://127.0.0.1:11435/v1/models > models-result.json || true
+          echo "Models result:"
+          cat models-result.json
           
-          echo "Running Vision API test..."
-          curl -s -X POST http://127.0.0.1:11435/api/vision \
-            -H "Content-Type: application/json" \
-            -d "{\"image\": \"data:image/png;base64,$TEST_IMAGE_B64\", \"prompt\": \"What text do you see in this image?\", \"max_tokens\": 200}" \
-            > vision-result.json 2>&1 || true
+          # Note: /api/vision endpoint not yet implemented
+          # Vision processing is available via the vision feature flag but
+          # the HTTP API endpoint hasn't been added to server.rs yet
+          echo "Note: /api/vision endpoint not yet implemented in server"
+          echo "Vision feature is compiled in, but API endpoint pending"
           
-          echo "Vision API Result:"
-          cat vision-result.json
-          
-          # Check result
-          if [ -s vision-result.json ] && grep -q "error\|text\|content" vision-result.json; then
-            echo "✅ Vision API responded"
-            VISION_SUCCESS="true"
-          else
-            echo "⚠️ Vision API test inconclusive"
-            VISION_SUCCESS="false"
-          fi
-          
-          # Save for test results
-          echo "$VISION_SUCCESS" > vision-test-status.txt
+          # Save server status for results
+          echo "$SERVER_READY" > server-test-status.txt
           
           # Cleanup
           kill $SERVER_PID 2>/dev/null || true
 
       - name: Generate test results
         run: |
-          VISION_SUCCESS=$(cat vision-test-status.txt 2>/dev/null || echo "false")
+          SERVER_SUCCESS=$(cat server-test-status.txt 2>/dev/null || echo "false")
           
           cat > test-results-linux-x86_64.json << EOF
           {
             "platform": "linux-x86_64",
-            "vision_enabled": true,
+            "vision_feature_compiled": true,
             "model_cached": ${{ steps.cache-model.outputs.cache-hit == 'true' }},
             "tests": {
               "binary_loads": true,
               "help_works": true,
-              "vision_api_test": $VISION_SUCCESS
+              "server_starts": $SERVER_SUCCESS,
+              "vision_api_endpoint": "not_implemented"
             },
+            "notes": "Vision feature compiled but /api/vision endpoint pending",
             "timestamp": "${{ github.run_id }}"
           }
           EOF
@@ -369,7 +367,7 @@ jobs:
           ./bin/shimmy.exe --help || echo "Help completed"
           echo "✅ Help displayed"
 
-      - name: Test 3 - Start server and test Vision API
+      - name: Test 3 - Start server and test endpoints
         shell: bash
         run: |
           # Start server in background
@@ -378,38 +376,35 @@ jobs:
           echo "Server started with PID $SERVER_PID"
           
           # Wait for server to be ready
+          SERVER_READY="false"
           for i in {1..30}; do
             if curl -s http://127.0.0.1:11435/health > /dev/null 2>&1; then
               echo "Server is ready"
+              SERVER_READY="true"
               break
             fi
             echo "Waiting for server... ($i/30)"
             sleep 2
           done
           
-          # Download a test image
-          curl -L -o test-ocr.png "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4f/SVG_Logo.svg/320px-SVG_Logo.svg.png"
+          # Test health endpoint
+          echo "Testing health endpoint..."
+          curl -s http://127.0.0.1:11435/health > health-result.json || true
+          echo "Health check result:"
+          cat health-result.json
           
-          # Convert image to base64 (Windows compatible)
-          TEST_IMAGE_B64=$(base64 -w 0 test-ocr.png 2>/dev/null || base64 test-ocr.png | tr -d '\n')
+          # Test models endpoint (OpenAI compatible)
+          echo "Testing models endpoint..."
+          curl -s http://127.0.0.1:11435/v1/models > models-result.json || true
+          echo "Models result:"
+          cat models-result.json
           
-          echo "Running Vision API test..."
-          curl -s -X POST http://127.0.0.1:11435/api/vision \
-            -H "Content-Type: application/json" \
-            -d "{\"image\": \"data:image/png;base64,$TEST_IMAGE_B64\", \"prompt\": \"What text do you see in this image?\", \"max_tokens\": 200}" \
-            > vision-result.json 2>&1 || true
+          # Note: /api/vision endpoint not yet implemented
+          echo "Note: /api/vision endpoint not yet implemented in server"
+          echo "Vision feature is compiled in, but API endpoint pending"
           
-          echo "Vision API Result:"
-          cat vision-result.json
-          
-          # Check result
-          if [ -s vision-result.json ] && grep -q "error\|text\|content" vision-result.json; then
-            echo "✅ Vision API responded"
-            echo "true" > vision-test-status.txt
-          else
-            echo "⚠️ Vision API test inconclusive"
-            echo "false" > vision-test-status.txt
-          fi
+          # Save server status for results
+          echo "$SERVER_READY" > server-test-status.txt
           
           # Cleanup - taskkill for Windows
           taskkill //F //PID $SERVER_PID 2>/dev/null || kill $SERVER_PID 2>/dev/null || true
@@ -417,18 +412,20 @@ jobs:
       - name: Generate test results
         shell: bash
         run: |
-          VISION_SUCCESS=$(cat vision-test-status.txt 2>/dev/null || echo "false")
+          SERVER_SUCCESS=$(cat server-test-status.txt 2>/dev/null || echo "false")
           
           cat > test-results-windows-x86_64.json << EOF
           {
             "platform": "windows-x86_64",
-            "vision_enabled": true,
+            "vision_feature_compiled": true,
             "model_cached": ${{ steps.cache-model.outputs.cache-hit == 'true' }},
             "tests": {
               "binary_loads": true,
               "help_works": true,
-              "vision_api_test": $VISION_SUCCESS
+              "server_starts": $SERVER_SUCCESS,
+              "vision_api_endpoint": "not_implemented"
             },
+            "notes": "Vision feature compiled but /api/vision endpoint pending",
             "timestamp": "${{ github.run_id }}"
           }
           EOF
@@ -460,19 +457,21 @@ jobs:
         run: |
           echo "# 👁️ Vision Cross-Platform Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Vision Enabled | Model Cached | Vision API Test |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|----------------|--------------|-----------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Vision Compiled | Server Starts | Vision API |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-----------------|---------------|------------|" >> $GITHUB_STEP_SUMMARY
           
           for file in ./results/*/test-results-*.json; do
             if [ -f "$file" ]; then
               platform=$(jq -r '.platform' "$file")
-              vision=$(jq -r '.vision_enabled' "$file")
-              cached=$(jq -r '.model_cached // "N/A"' "$file")
-              vision_api=$(jq -r '.tests.vision_api_test // "N/A"' "$file")
-              echo "| $platform | $vision | $cached | $vision_api |" >> $GITHUB_STEP_SUMMARY
+              vision=$(jq -r '.vision_feature_compiled // .vision_enabled // "N/A"' "$file")
+              server=$(jq -r '.tests.server_starts // "N/A"' "$file")
+              vision_api=$(jq -r '.tests.vision_api_endpoint // .tests.vision_api_test // "N/A"' "$file")
+              echo "| $platform | $vision | $server | $vision_api |" >> $GITHUB_STEP_SUMMARY
             fi
           done
           
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note**: Vision feature is compiled into binaries but the /api/vision HTTP endpoint is not yet implemented." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Run ID: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
 
