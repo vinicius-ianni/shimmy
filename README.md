@@ -209,6 +209,11 @@ cargo install shimmy --features huggingface,llama,vision
 
 **✨ NEW in v1.9.0**: One binary per platform with automatic GPU detection!
 
+> **⚠️ IMPORTANT - Vision Feature Performance**:  
+> CPU-based vision inference (MiniCPM-V) is **5-10x slower** than GPU acceleration.  
+> **CPU**: 15-45 seconds per image | **GPU (CUDA/Vulkan)**: 2-8 seconds per image  
+> **For production vision workloads, GPU acceleration is strongly recommended.**
+
 #### **📥 Download Pre-Built Binaries (Recommended)**
 
 No compilation needed! Each binary includes ALL GPU backends for your platform:
@@ -256,21 +261,36 @@ Shimmy uses intelligent GPU detection with this priority order:
 Want to force a specific backend? Use the `--gpu-backend` flag:
 
 ```bash
-# Auto-detect (default)
+# Auto-detect (default - recommended)
 shimmy serve --gpu-backend auto
 
-# Force CPU (for testing)
+# Force CPU (for testing or compatibility)
 shimmy serve --gpu-backend cpu
 
-# Force CUDA (if you have NVIDIA)
+# Force CUDA (NVIDIA GPUs only)
 shimmy serve --gpu-backend cuda
 
-# Force Vulkan (AMD/Intel/Others)
+# Force Vulkan (AMD/Intel/Cross-platform)
 shimmy serve --gpu-backend vulkan
 
 # Force OpenCL (AMD/Intel alternative)
 shimmy serve --gpu-backend opencl
 ```
+
+**🛡️ Error Handling & Robustness**: If you force an unavailable backend (e.g., `--gpu-backend cuda` on AMD GPU), Shimmy will:
+1. ✅ Display clear error message explaining the issue
+2. ✅ Automatically fallback to next available backend in priority order
+3. ✅ Log which backend was actually used (check with `--verbose`)
+4. ✅ Continue serving requests (graceful degradation, no crashes)
+5. ✅ Support environment variable override: `SHIMMY_GPU_BACKEND=cuda`
+
+**Common scenarios**:
+- `--gpu-backend cuda` on non-NVIDIA → Falls back to Vulkan or OpenCL
+- `--gpu-backend vulkan` without drivers → Falls back to OpenCL or CPU
+- `--gpu-backend invalid` → Clear error + fallback to auto-detection
+- No GPU detected → Runs on CPU with performance warning
+
+**Environment Variable**: Set `SHIMMY_GPU_BACKEND=cuda` to override default without CLI flags.
 
 #### **🔍 Check GPU Support**
 ```bash
