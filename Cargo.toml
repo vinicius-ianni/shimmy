@@ -85,6 +85,7 @@ tempfile = "3"  # For creating temporary test directories
 rand = "0.8"    # For randomized testing scenarios (already in main deps)
 assert_cmd = "2"  # For CLI testing
 predicates = "3"  # For assertion predicates in tests
+tower = { version = "0.5", features = ["util"] }  # For test oneshot helper
 # Note: tempfile is already in main dependencies, rand is already in main dependencies
 
 [profile.release]

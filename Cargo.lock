@@ -2396,6 +2396,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.20.1",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "uuid",
