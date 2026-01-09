@@ -12,6 +12,7 @@ mod issue_012_tests {
     use std::path::PathBuf;
 
     #[test]
+    #[serial_test::serial]
     fn test_custom_model_directory_environment_variables() {
         // Test that custom model directories are detected via environment variables
         let test_dirs = vec![
@@ -26,7 +27,7 @@ mod issue_012_tests {
             let custom_path = PathBuf::from(path);
 
             // Verify the path was set correctly
-            assert_eq!(env::var(env_var).unwrap(), path);
+            assert_eq!(env::var(env_var).ok(), Some(path.to_string()));
 
             // Test that directory scanning doesn't crash with custom paths
             // Even if directory doesn't exist, should handle gracefully
