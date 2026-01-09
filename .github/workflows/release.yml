@@ -202,44 +202,69 @@ jobs:
           name: gate-built-binary
           path: ./
 
-      - name: Upload as Linux x86_64 artifact
+      - name: Upload as Linux x86_64 CPU artifact
         uses: actions/upload-artifact@v4
         with:
-          name: shimmy-linux-x86_64
+          name: shimmy-linux-x86_64-cpu
           path: shimmy
 
-  # 🚀 CROSS-PLATFORM BUILDS (ONLY WHAT GATES DIDN'T BUILD)
+  # 🚀 CROSS-PLATFORM BUILDS (CPU + GPU VARIANTS)
+  # Note: Linux x86_64 CPU built in preflight gates, reused here
   build:
     needs: preflight
     if: needs.preflight.outputs.should_publish == 'true'
     strategy:
       matrix:
         include:
+          # Linux x86_64 - CUDA GPU
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
+            target: x86_64-unknown-linux-gnu
             binary-name: shimmy
-            artifact-name: shimmy-linux-x86_64-universal
+            artifact-name: shimmy-linux-x86_64-cuda
+            features: huggingface,llama,llama-cuda,vision
 
+          # Linux ARM64 - CPU only
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary-name: shimmy
-            artifact-name: shimmy-linux-aarch64
+            artifact-name: shimmy-linux-aarch64-cpu
+            features: huggingface,llama,vision
             use-cross: true
 
+          # Windows - CPU only
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary-name: shimmy.exe
-            artifact-name: shimmy-windows-x86_64.exe
+            artifact-name: shimmy-windows-x86_64-cpu.exe
+            features: huggingface,llama,vision
 
+          # Windows - Vulkan GPU
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary-name: shimmy.exe
+            artifact-name: shimmy-windows-x86_64-vulkan.exe
+            features: huggingface,llama,llama-vulkan,vision
+
+          # macOS Intel - CPU only
           - os: macos-latest
             target: x86_64-apple-darwin
             binary-name: shimmy
-            artifact-name: shimmy-macos-intel
+            artifact-name: shimmy-macos-intel-cpu
+            features: huggingface,llama,vision
 
+          # macOS ARM64 - CPU only
           - os: macos-latest
             target: aarch64-apple-darwin
             binary-name: shimmy
-            artifact-name: shimmy-macos-arm64
+            artifact-name: shimmy-macos-arm64-cpu
+            features: huggingface,llama,vision
+
+          # macOS ARM64 - MLX GPU
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary-name: shimmy
+            artifact-name: shimmy-macos-arm64-mlx
+            features: huggingface,llama,mlx,vision
 
     runs-on: ${{ matrix.os }}
     env:
@@ -273,25 +298,10 @@ jobs:
           CROSS_NO_WARNINGS: 1
           MACOSX_DEPLOYMENT_TARGET: "12.0"
         run: |
-          # Determine features based on platform (Issue #129: GPU support in precompiled binaries)
-          # Vision feature included for licensed vision capabilities
-          FEATURES="huggingface,llama,vision"
+          # Features defined in matrix for explicit CPU/GPU variants
+          FEATURES="${{ matrix.features }}"
           
-          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
-            # musl builds: use huggingface-only to avoid llama.cpp C++ compilation issues
-            FEATURES="huggingface,vision"
-          elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            # ARM64 Linux: CPU-only features (Issue #131)
-            FEATURES="huggingface,llama,vision"
-          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            # Windows: Add Vulkan support for GPU acceleration
-            FEATURES="huggingface,llama,llama-vulkan,vision"
-          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            # macOS: Add MLX support for Apple Silicon GPU acceleration
-            FEATURES="huggingface,llama,mlx,vision"
-          fi
-          
-          echo "Building with features: $FEATURES"
+          echo "Building ${{ matrix.artifact-name }} with features: $FEATURES"
           
           # Use cross for ARM64 cross-compilation, cargo for native builds
           if [[ "${{ matrix.use-cross }}" == "true" ]]; then
@@ -324,21 +334,29 @@ jobs:
         run: |
           mkdir -p release-files
 
-          # Copy and rename artifacts
-          cp artifacts/shimmy-linux-x86_64/shimmy release-files/shimmy-linux-x86_64
-          cp artifacts/shimmy-linux-x86_64/shimmy release-files/shimmy  # Generic name
+          # Linux x86_64 - CPU and CUDA variants
+          cp artifacts/shimmy-linux-x86_64-cpu/shimmy release-files/shimmy-linux-x86_64-cpu
+          cp artifacts/shimmy-linux-x86_64-cuda/shimmy release-files/shimmy-linux-x86_64-cuda
+          cp artifacts/shimmy-linux-x86_64-cpu/shimmy release-files/shimmy  # Generic = CPU
 
-          cp artifacts/shimmy-linux-aarch64/shimmy release-files/shimmy-linux-aarch64
+          # Linux ARM64 - CPU only
+          cp artifacts/shimmy-linux-aarch64-cpu/shimmy release-files/shimmy-linux-aarch64-cpu
 
-          cp artifacts/shimmy-windows-x86_64.exe/shimmy.exe release-files/shimmy-windows-x86_64.exe
-          cp artifacts/shimmy-windows-x86_64.exe/shimmy.exe release-files/shimmy.exe  # Generic name
+          # Windows - CPU and Vulkan variants
+          cp artifacts/shimmy-windows-x86_64-cpu.exe/shimmy.exe release-files/shimmy-windows-x86_64-cpu.exe
+          cp artifacts/shimmy-windows-x86_64-vulkan.exe/shimmy.exe release-files/shimmy-windows-x86_64-vulkan.exe
+          cp artifacts/shimmy-windows-x86_64-cpu.exe/shimmy.exe release-files/shimmy.exe  # Generic = CPU
 
-          cp artifacts/shimmy-macos-intel/shimmy release-files/shimmy-macos-intel
-          cp artifacts/shimmy-macos-arm64/shimmy release-files/shimmy-macos-arm64
+          # macOS Intel - CPU only (MLX doesn't work on Intel)
+          cp artifacts/shimmy-macos-intel-cpu/shimmy release-files/shimmy-macos-intel-cpu
+
+          # macOS ARM64 - CPU and MLX variants
+          cp artifacts/shimmy-macos-arm64-cpu/shimmy release-files/shimmy-macos-arm64-cpu
+          cp artifacts/shimmy-macos-arm64-mlx/shimmy release-files/shimmy-macos-arm64-mlx
 
           # List what we're releasing
           echo "Release files:"
-          ls -la release-files/
+          ls -lh release-files/
 
       - name: Create release
         env:
