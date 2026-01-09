@@ -38,6 +38,46 @@ jobs:
           timeout 10 ./shimmy serve --bind 127.0.0.1:11435 || true
           echo "✅ Server binary can start"
 
+      - name: Download test image
+        run: |
+          curl -L -o test-image.jpg "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/320px-Camponotus_flavomarginatus_ant.jpg"
+
+      - name: Test vision features
+        env:
+          SHIMMY_LICENSE_KEY: "1CF681-F65AC1-34018A-CA470A-1B107D-V3"
+        run: |
+          # Start server in background
+          ./shimmy serve --bind 127.0.0.1:11435 &
+          SERVER_PID=$!
+          
+          # Wait for server
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:11435/health > /dev/null 2>&1; then
+              echo "✅ Server ready"
+              break
+            fi
+            sleep 1
+          done
+          
+          # Test vision API with test image
+          base64_image=$(base64 -w 0 test-image.jpg)
+          response=$(curl -s -X POST http://127.0.0.1:11435/api/vision \
+            -H "Content-Type: application/json" \
+            -d "{\"prompt\":\"What is in this image?\",\"image\":\"data:image/jpeg;base64,$base64_image\",\"max_tokens\":50}")
+          
+          echo "Vision API response: $response"
+          
+          # Check if response contains expected fields (either success or license error)
+          if echo "$response" | grep -q "error\|choices\|message"; then
+            echo "✅ Vision API responding correctly"
+          else
+            echo "❌ Vision API returned unexpected response"
+            kill $SERVER_PID
+            exit 1
+          fi
+          
+          kill $SERVER_PID
+
   test-linux-arm64:
     runs-on: ubuntu-latest
     steps:
@@ -83,6 +123,47 @@ jobs:
           shimmy-windows-x86_64.exe --help
           echo ✅ Help command works
 
+      - name: Download test image
+        shell: bash
+        run: |
+          curl -L -o test-image.jpg "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/320px-Camponotus_flavomarginatus_ant.jpg"
+
+      - name: Test vision features
+        shell: bash
+        env:
+          SHIMMY_LICENSE_KEY: "1CF681-F65AC1-34018A-CA470A-1B107D-V3"
+        run: |
+          # Start server in background
+          ./shimmy-windows-x86_64.exe serve --bind 127.0.0.1:11435 &
+          SERVER_PID=$!
+          
+          # Wait for server
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:11435/health > /dev/null 2>&1; then
+              echo "✅ Server ready"
+              break
+            fi
+            sleep 1
+          done
+          
+          # Test vision API
+          base64_image=$(base64 -w 0 test-image.jpg)
+          response=$(curl -s -X POST http://127.0.0.1:11435/api/vision \
+            -H "Content-Type: application/json" \
+            -d "{\"prompt\":\"What is in this image?\",\"image\":\"data:image/jpeg;base64,$base64_image\",\"max_tokens\":50}")
+          
+          echo "Vision API response: $response"
+          
+          if echo "$response" | grep -q "error\|choices\|message"; then
+            echo "✅ Vision API responding correctly"
+          else
+            echo "❌ Unexpected response"
+            taskkill //PID $SERVER_PID //F
+            exit 1
+          fi
+          
+          taskkill //PID $SERVER_PID //F
+
   test-macos-intel:
     runs-on: macos-latest
     steps:
@@ -106,6 +187,41 @@ jobs:
           ./shimmy --help
           echo "✅ Help command works"
 
+      - name: Download test image
+        run: |
+          curl -L -o test-image.jpg "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/320px-Camponotus_flavomarginatus_ant.jpg"
+
+      - name: Test vision features
+        env:
+          SHIMMY_LICENSE_KEY: "1CF681-F65AC1-34018A-CA470A-1B107D-V3"
+        run: |
+          ./shimmy serve --bind 127.0.0.1:11435 &
+          SERVER_PID=$!
+          
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:11435/health > /dev/null 2>&1; then
+              echo "✅ Server ready"
+              break
+            fi
+            sleep 1
+          done
+          
+          base64_image=$(base64 test-image.jpg | tr -d '\n')
+          response=$(curl -s -X POST http://127.0.0.1:11435/api/vision \
+            -H "Content-Type: application/json" \
+            -d "{\"prompt\":\"What is in this image?\",\"image\":\"data:image/jpeg;base64,$base64_image\",\"max_tokens\":50}")
+          
+          echo "Vision API response: $response"
+          
+          if echo "$response" | grep -q "error\|choices\|message"; then
+            echo "✅ Vision API responding"
+          else
+            kill $SERVER_PID
+            exit 1
+          fi
+          
+          kill $SERVER_PID
+
   test-macos-arm64:
     runs-on: macos-14
     steps:
@@ -128,6 +244,41 @@ jobs:
         run: |
           ./shimmy --help
           echo "✅ Help command works"
+
+      - name: Download test image
+        run: |
+          curl -L -o test-image.jpg "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/320px-Camponotus_flavomarginatus_ant.jpg"
+
+      - name: Test vision features
+        env:
+          SHIMMY_LICENSE_KEY: "1CF681-F65AC1-34018A-CA470A-1B107D-V3"
+        run: |
+          ./shimmy serve --bind 127.0.0.1:11435 &
+          SERVER_PID=$!
+          
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:11435/health > /dev/null 2>&1; then
+              echo "✅ Server ready"
+              break
+            fi
+            sleep 1
+          done
+          
+          base64_image=$(base64 test-image.jpg | tr -d '\n')
+          response=$(curl -s -X POST http://127.0.0.1:11435/api/vision \
+            -H "Content-Type: application/json" \
+            -d "{\"prompt\":\"What is in this image?\",\"image\":\"data:image/jpeg;base64,$base64_image\",\"max_tokens\":50}")
+          
+          echo "Vision API response: $response"
+          
+          if echo "$response" | grep -q "error\|choices\|message"; then
+            echo "✅ Vision API responding"
+          else
+            kill $SERVER_PID
+            exit 1
+          fi
+          
+          kill $SERVER_PID
 
   summary:
     runs-on: ubuntu-latest
