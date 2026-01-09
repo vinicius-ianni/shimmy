@@ -56,7 +56,7 @@ jobs:
 
       - name: Test binary in ARM64 container
         run: |
-          docker run --rm --platform linux/arm64 -v $(pwd)/shimmy:/shimmy:ro arm64v8/ubuntu:22.04 /bin/bash -c "chmod +x /shimmy && /shimmy --version"
+          docker run --rm --platform linux/arm64 -v $(pwd):/host arm64v8/ubuntu:22.04 /bin/bash -c "cp /host/shimmy /tmp/shimmy && chmod +x /tmp/shimmy && /tmp/shimmy --version"
           echo "✅ ARM64 binary works"
 
   test-windows-x86_64:
