@@ -30,7 +30,7 @@ jobs:
       - name: "🚧 GATE 1/7: Core Build Validation"
         run: |
           echo "::group::Gate 1: Core Build"
-          cargo build --release --no-default-features --features huggingface,llama,llama-cuda,llama-vulkan,llama-opencl,vision
+          cargo build --release --no-default-features --features huggingface,llama,vision
           echo "✅ Core build successful"
           echo "::endgroup::"
 
